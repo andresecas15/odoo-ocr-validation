@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diagrama de Flujo OCR - Odoo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Forzamos al diagrama a tomar el máximo ancho posible */
+        .mermaid {
+            width: 100%;
+            display: flex;
+            justify-content: center;
+        }
+
+        .mermaid svg {
+            width: 100% !important;
+            max-width: 1200px !important;
+            height: auto !important;
+            min-height: 600px;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-100 min-h-screen p-4 md:p-8 font-sans flex items-center justify-center">
+
+    <!-- Cambiamos max-w-5xl por max-w-7xl para hacer la tarjeta mucho más ancha -->
+    <div class="max-w-7xl w-full bg-white rounded-xl shadow-xl overflow-hidden">
+        <div class="bg-blue-900 text-white p-6 text-center">
+            <h1 class="text-2xl font-bold">Flujo de Validación OCR y Visión Computacional</h1>
+            <p class="text-blue-200 mt-2 text-sm">Odoo 16 + FastAPI + PaddleOCR + YOLO</p>
+        </div>
+
+        <div class="p-8 overflow-x-auto flex justify-center">
+            <!-- Contenedor del diagrama Mermaid -->
+            <pre class="mermaid text-center">
+                %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#f3f4f6', 'lineColor': '#1e3a8a', 'fontFamily': 'sans-serif'}}}%%
+                sequenceDiagram
+                    autonumber
+                    actor Usuario
+                    participant Odoo as Odoo 16 (Gerente)
+                    participant FastAPI as FastAPI (Coordinador)
+                    participant PaddleOCR as PaddleOCR (IA Texto)
+                    participant YOLO as YOLO (IA Visual)
+
+                    rect rgb(240, 248, 255)
+                    Note over Usuario, FastAPI: PASO 1: La Petición
+                    Usuario->>Odoo: Sube PDF y hace clic en "Analizar"
+                    Odoo->>FastAPI: Envía PDF por red interna (HTTP POST)
+                    end
+
+                    rect rgb(255, 248, 240)
+                    Note over FastAPI, YOLO: PASO 2: El Análisis
+                    FastAPI->>FastAPI: Convierte PDF a Imágenes
+                    par Análisis de Texto
+                        FastAPI->>PaddleOCR: Envía copia de imagen ("Búscame una fecha")
+                        PaddleOCR-->>FastAPI: Extrae texto y retorna: "19-02-2026"
+                    and Análisis Visual
+                        FastAPI->>YOLO: Envía copia de imagen ("Búscame firma y huella")
+                        YOLO-->>FastAPI: Detecta formas y retorna: Firma (Sí), Huella (No)
+                    end
+                    end
+
+                    rect rgb(240, 255, 240)
+                    Note over FastAPI, Odoo: PASO 3: El Veredicto
+                    FastAPI->>FastAPI: Arma reporte JSON consolidado
+                    FastAPI-->>Odoo: Responde {"firma": true, "huella": false, "fecha": "19-02-2026"}
+                    end
+
+                    rect rgb(253, 240, 255)
+                    Note over Odoo, Usuario: PASO 4: El Resultado
+                    Odoo->>Odoo: Procesa JSON y actualiza campos en BD
+                    Odoo-->>Usuario: Marca checkboxes en pantalla (Tiempo: 2-5 seg)
+                    end
+            </pre>
+        </div>
+
+        <div class="bg-gray-50 p-6 border-t border-gray-200 text-sm text-gray-600">
+            <h3 class="font-bold mb-2">Resumen de la arquitectura:</h3>
+            <ul class="list-disc pl-5 space-y-1">
+                <li>El procesamiento pesado ocurre fuera del ERP para evitar bloqueos.</li>
+                <li><strong>PaddleOCR</strong> y <strong>YOLO</strong> trabajan en paralelo (al mismo tiempo) para
+                    reducir el tiempo de respuesta.</li>
+                <li>La comunicación se realiza mediante red interna.</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- Script para renderizar Mermaid.js -->
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        // Añadimos configuración extra para aumentar el tamaño de fuente general del diagrama
+        mermaid.initialize({
+            startOnLoad: true,
+            themeVariables: {
+                fontSize: '18px'
+            }
+        });
+    </script>
+</body>
+
+</html>
