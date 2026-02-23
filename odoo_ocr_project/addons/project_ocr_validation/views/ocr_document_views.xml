@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+        <record id="view_ocr_document_tree" model="ir.ui.view">
+        <field name="name">project.ocr.document.tree</field>
+        <field name="model">project.ocr.document</field>
+        <field name="arch" type="xml">
+            <tree string="Documentos OCR"
+                  decoration-success="state == 'done'"
+                  decoration-danger="state == 'error'"
+                  decoration-info="state == 'processing'"
+                  decoration-muted="state == 'draft'">
+                <field name="name"/>
+                <field name="document_type"/>
+                <field name="attachment_id"/>
+                <field name="state"
+                       widget="badge"
+                       decoration-success="state == 'done'"
+                       decoration-danger="state == 'error'"
+                       decoration-info="state == 'processing'"
+                       decoration-muted="state == 'draft'"/>
+                <field name="validation_state"
+                       widget="badge"
+                       decoration-success="validation_state == 'conforme'"
+                       decoration-warning="validation_state == 'observado'"
+                       decoration-danger="validation_state == 'no_conforme'"/>
+                <field name="has_signature"/>
+                <field name="has_fingerprint"/>
+                <field name="has_date"/>
+                <field name="extracted_date"/>
+                <field name="create_date" string="Fecha de Creación"/>
+            </tree>
+        </field>
+    </record>
+
+        <record id="view_ocr_document_form" model="ir.ui.view">
+        <field name="name">project.ocr.document.form</field>
+        <field name="model">project.ocr.document</field>
+        <field name="arch" type="xml">
+            <form string="Documento OCR">
+                <header>
+                    <!-- Botón principal de análisis -->
+                    <button name="action_analyze_document"
+                            string="Analizar Documento"
+                            type="object"
+                            class="btn-primary"
+                            attrs="{'invisible': [('state', 'not in', ['draft', 'error'])]}"
+                            confirm="¿Desea enviar este documento al motor de análisis OCR?"/>
+
+                    <!-- Botón de reinicio -->
+                    <button name="action_reset_to_draft"
+                            string="Reiniciar a Borrador"
+                            type="object"
+                            class="btn-secondary"
+                            attrs="{'invisible': [('state', 'in', ['draft'])]}"
+                            confirm="¿Está seguro de reiniciar el análisis? Se borrarán los resultados actuales."/>
+
+                    <!-- Barra de estados -->
+                    <field name="state"
+                           widget="statusbar"
+                           statusbar_visible="draft,processing,done"/>
+                </header>
+
+                <sheet>
+                    <!-- Banner de error -->
+                    <div class="alert alert-danger" role="alert"
+                         attrs="{'invisible': [('state', '!=', 'error')]}">
+                        <strong>Error en el análisis:</strong>
+                        <field name="error_message" nolabel="1"/>
+                    </div>
+
+                    <!-- Título principal -->
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1>
+                            <field name="name"
+                                   placeholder="Nombre del documento..."
+                                   attrs="{'readonly': [('state', '!=', 'draft')]}"/>
+                            <field name="validation_state"
+                                   widget="badge"
+                                   decoration-success="validation_state == 'conforme'"
+                                   decoration-warning="validation_state == 'observado'"
+                                   decoration-danger="validation_state == 'no_conforme'"
+                                   attrs="{'invisible': [('state', '!=', 'done')]}"
+                                   class="oe_inline ms-3"/>
+                        </h1>
+                    </div>
+
+                    <group>
+                        <!-- Columna izquierda: Datos del documento -->
+                        <group string="Documento" name="document_info">
+                            <field name="document_type"
+                                   attrs="{'readonly': [('state', '!=', 'draft')]}"/>
+                            <field name="attachment_id"
+                                   attrs="{'readonly': [('state', '!=', 'draft')]}"/>
+                        </group>
+
+                        <!-- Columna derecha: Resultados del análisis -->
+                        <group string="Resultados del Análisis" name="analysis_results">
+                            <field name="has_signature" widget="boolean_toggle"/>
+                            <field name="firma_word_count"/>
+                            <field name="firma_detected_count"/>
+                            <field name="has_fingerprint" widget="boolean_toggle"/>
+                            <field name="has_date" widget="boolean_toggle"/>
+                            <field name="fecha_word_count"/>
+                            <field name="fecha_value_count"/>
+                            <field name="extracted_date"
+                                   attrs="{'invisible': [('has_date', '=', False)]}"/>
+                        </group>
+                    </group>
+
+                    <!-- Resumen visual de validación -->
+                    <group string="Resumen de Validación"
+                           attrs="{'invisible': [('state', '!=', 'done')]}">
+                        <field name="validation_summary" nolabel="1"/>
+                    </group>
+
+                    <!-- Notebook con pestañas adicionales -->
+                    <notebook attrs="{'invisible': [('state', 'in', ['draft'])]}">
+                        <page string="Detalles Técnicos" name="technical_details">
+                            <group>
+                                <field name="analysis_details"
+                                       widget="text"
+                                       readonly="1"/>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+
+                <!-- Chatter -->
+                <div class="oe_chatter">
+                    <field name="message_follower_ids"/>
+                    <field name="activity_ids"/>
+                    <field name="message_ids"/>
+                </div>
+            </form>
+        </field>
+    </record>
+
+        <record id="view_ocr_document_search" model="ir.ui.view">
+        <field name="name">project.ocr.document.search</field>
+        <field name="model">project.ocr.document</field>
+        <field name="arch" type="xml">
+            <search string="Buscar Documentos OCR">
+                <field name="name"/>
+                <field name="extracted_date"/>
+
+                <!-- Filtros predefinidos -->
+                <filter string="Borrador" name="filter_draft"
+                        domain="[('state', '=', 'draft')]"/>
+                <filter string="Completados" name="filter_done"
+                        domain="[('state', '=', 'done')]"/>
+                <filter string="Con Error" name="filter_error"
+                        domain="[('state', '=', 'error')]"/>
+
+                <separator/>
+
+                <filter string="Con Firma" name="filter_signature"
+                        domain="[('has_signature', '=', True)]"/>
+                <filter string="Con Huella" name="filter_fingerprint"
+                        domain="[('has_fingerprint', '=', True)]"/>
+                <filter string="Con Fecha" name="filter_date"
+                        domain="[('has_date', '=', True)]"/>
+
+                <separator/>
+
+                <filter string="Validación Completa" name="filter_complete"
+                        domain="[('has_signature', '=', True), ('has_fingerprint', '=', True), ('has_date', '=', True)]"/>
+
+                <!-- Agrupaciones -->
+                <group expand="0" string="Agrupar por">
+                    <filter string="Tipo de Documento" name="group_document_type"
+                            context="{'group_by': 'document_type'}"/>
+                    <filter string="Estado" name="group_state"
+                            context="{'group_by': 'state'}"/>
+                    <filter string="Fecha de Creación" name="group_create_date"
+                            context="{'group_by': 'create_date:month'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+        <record id="action_ocr_document" model="ir.actions.act_window">
+        <field name="name">Documentos OCR</field>
+        <field name="res_model">project.ocr.document</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="view_ocr_document_search"/>
+        <field name="context">{'search_default_filter_draft': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Cree su primer documento para análisis OCR
+            </p>
+            <p>
+                Suba un archivo PDF y haga clic en <strong>"Analizar Documento"</strong>
+                para extraer automáticamente fechas y detectar firmas y huellas dactilares.
+            </p>
+        </field>
+    </record>
+
+        <menuitem id="menu_ocr_root"
+              name="Validación OCR"
+              web_icon="project_ocr_validation,static/description/icon.png"
+              sequence="100"/>
+
+    <menuitem id="menu_ocr_documents"
+              name="Documentos"
+              parent="menu_ocr_root"
+              action="action_ocr_document"
+              sequence="10"/>
+
+</odoo>

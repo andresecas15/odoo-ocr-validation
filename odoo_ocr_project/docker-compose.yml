@@ -1,0 +1,74 @@
+services:
+  # ─────────────────────────────────────────────
+  # PostgreSQL 14 – Base de datos para Odoo
+  # ─────────────────────────────────────────────
+  db:
+    image: postgres:14
+    container_name: odoo_ocr_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: odoo
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: odoo_secure_pwd_2024
+    volumes:
+      - odoo_db_data:/var/lib/postgresql/data
+    networks:
+      - odoo_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────────
+  # Odoo 16 – ERP principal
+  # ─────────────────────────────────────────────
+  odoo:
+    image: odoo:16.0
+    container_name: odoo_ocr_web
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8069:8069"
+    environment:
+      - HOST=db
+      - PORT=5432
+      - USER=odoo
+      - PASSWORD=odoo_secure_pwd_2024
+    volumes:
+      - ./addons:/mnt/extra-addons
+      - odoo_data:/var/lib/odoo
+    networks:
+      - odoo_net
+
+  # ─────────────────────────────────────────────
+  # Microservicio OCR + YOLO (FastAPI)
+  # ─────────────────────────────────────────────
+  ocr_engine:
+    build:
+      context: ./ocr_microservice
+      dockerfile: Dockerfile
+    container_name: odoo_ocr_engine
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./ocr_microservice/models_ml:/app/models_ml
+    networks:
+      - odoo_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  odoo_db_data:
+  odoo_data:
+
+networks:
+  odoo_net:
+    driver: bridge

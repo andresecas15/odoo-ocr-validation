@@ -1,0 +1,22 @@
+# Python Caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pyenv / Virtual Environments
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDES / VSCode / Pycharm
+.vscode/
+.idea/
+
+# Testing / Logs
+*.log
+
+# Si se suben más modelos grandes (>50MB), agregarlos a mano:
+# ocr_microservice/models_ml/*.pt
