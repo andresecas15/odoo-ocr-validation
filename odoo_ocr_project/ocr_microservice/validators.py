@@ -58,46 +58,60 @@ _REF_BANCARIA_RE = re.compile(r'(?i)referencia\s*bancaria')
 _REF_PERSONAL_RE = re.compile(r'(?i)referencia\s*personal')
 
 # VL-05 – Cargo / Posición
-# La tabla OCR produce:
-#   Fila headers: TIPO DE CLIENTE | CARGO O POSICIÓN | SALARIO | TELÉFONO
-#   Fila valores: Gobierno         | Enfermera Basica | 1200.01 | -----
-# PaddleOCR concatena en una sola línea: 
-#   "CARGO O POSICIÓN SALARIO TELÉFONO\nGobierno Enfermera Basica 1200.01..."
-# Estrategia: saltar la línea del header y en la siguiente línea:
-#   1) Si empieza con TIPO DE CLIENTE (Gobierno/Privado/etc.) → quitarlo
-#   2) Tomar el texto que sigue como cargo real
+# La tabla tiene:
+#   Headers: TIPO DE CLIENTE | CARGO O POSICIÓN | SALARIO | TELÉFONO
+#   Valores: Gobierno         | Otros            | 1200.01 | NO TIENE
+#
+# NUEVA ESTRATEGIA: buscar directamente el patrón
+#   TIPO_CLIENTE_KEYWORD <spaces> CARGO_WORDS <spaces> NÚMERO_DE_SALARIO
+# Sin depender de saltos de línea (que PaddleOCR no garantiza en tablas).
+#
+# Los valores conocidos de TIPO DE CLIENTE son los anchos de tabla que
+# aparecen SIEMPRE antes del cargo. Los usamos como punto de partida.
 _CARGO_LABEL_RE = re.compile(
-    r'(?i)(?:cargo\s+o\s+posici[oó]n|posici[oó]n\s+u\s+oficio|posici[oó]n|ocupaci[oó]n|profesi[oó]n\s+u\s+oficio|profesi[oó]n)'
+    r'(?i)\b(?:cargo\s+o\s+posici[oó]n|cargo\s+o\s+posicion|posici[oó]n\s+u\s+oficio|'  # labels exactos
+    r'ocupaci[oó]n|profesi[oó]n)\b'
 )
+# Estrategia principal: TIPO_CLIENTE seguido de CARGO (palabras antes del salario)
+_CARGO_FROM_TIPO_CLIENTE_RE = re.compile(
+    r'(?i)\b(?:Gobierno|Privado|Independiente|Jubilado|Pensionado|P[uú]blico|Mixto)'
+    r'\s+'
+    r'([A-Za-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00fc\u00f1\u00c1\u00c9\u00cd\u00d3\u00da\u00dc\u00d1][A-Za-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00fc\u00f1\u00c1\u00c9\u00cd\u00d3\u00da\u00dc\u00d1\s]{1,50}?)'
+    r'\s+\d{3,}'  # el cargo termina cuando empieza el salario (número 3+ dígitos)
+)
+# Estrategia respaldo: línea siguiente al label (\b para evitar substring match en OPOSICION)
 _CARGO_NEXT_LINE_RE = re.compile(
-    r'(?i)(?:cargo\s+o\s+posici[oó]n|posici[oó]n|ocupaci[oó]n|profesi[oó]n)[^\n]*\n([^\n]{3,150})'
+    r'(?i)\bcargo\s+o\s+posici[oó]n\b[^\n]*\n([^\n]{3,100})'
 )
-# Valores de TIPO DE CLIENTE que pueden aparecer al inicio de la fila de valores
-_TIPO_CLIENTE_PREFIX_RE = re.compile(
-    r'(?i)^(?:Gobierno|Privado|Independiente|Jubilado|Pensionado|Público|Mixto)\s+'
-)
-# Palabras que indican que lo capturado aún es un encabezado de tabla
-_CARGO_HEADER_RE = re.compile(
-    r'(?i)\b(?:salario|tel[eé]fono|ingresos|planilla|cargo\so\s|tipo\sde\scliente)\b',
+_CARGO_HEADER_KW_RE = re.compile(
+    r'(?i)\b(?:salario|tel[eé]fono|telefono|ingresos|planilla|tipo\sde|cargo\so)\b'
 )
 
 # VL-06 – Rango salarial
+# Buscar el monto ÚNICAMENTE en el contexto de la línea/frase del label SALARIO
+# para evitar capturar números de cédula u otros campos.
 _SALARIO_KEYWORD_RE = re.compile(r'(?i)\b(?:salario|sueldo|ingreso)\b')
-_SALARY_AMOUNT_RE = re.compile(
-    r'(?:B/\.?\s*|\$\s*)?[\d,]+\.?\d*(?:\s*-\s*(?:B/\.?\s*|\$\s*)?[\d,]+\.?\d*)?|\b\d{3,}(?:[.,]\d{2})?(?:\s*-\s*\d{3,}(?:[.,]\d{2})?)?\b'
+# Rango con o sin B/.: captura "1200.01 - 1500.00" o "B/. 850" o "1200.01"
+_SALARY_RANGE_RE = re.compile(
+    r'(?:B/\.?\s*)?'             # prefijo opcional
+    r'(\d{3,}(?:[.,]\d{1,2})?)'  # primer monto
+    r'(?:\s*[-–]\s*(?:B/\.?\s*)?(\d{3,}(?:[.,]\d{1,2})?))?'  # rango opcional
 )
+# Ventana de chars para buscar el monto después del keyword SALARIO
+_SALARY_CONTEXT_WINDOW = 80
 
 # VL-07 – Lugar de nacimiento (Provincia + País)
-# Estrategia 1: el label está en la fila de encabezados, el valor en la siguiente.
-#   Regex que salta hasta el \n y toma la siguiente línea.
-_NACIMIENTO_LABEL_RE = re.compile(r'(?i)lugar\s+de\s+nacimiento')
+# NUEVA ESTRATEGIA: la provincia panameña es la fuente de verdad.
+# 1) Buscar la provincia directamente en el texto (sin depender de layout de tabla)
+# 2) Si la encuentra, el lugar de nacimiento está presente → passed=True
+# 3) La siguiente línea al label es solo un PLUS si contiene texto válido.
+_NACIMIENTO_LABEL_RE = re.compile(r'(?i)\blugar\s+de\s+nacimiento\b')
 _NACIMIENTO_NEXT_LINE_RE = re.compile(
-    r'(?i)lugar\s+de\s+nacimiento[^\n]*\n([^\n]{3,80})'
+    r'(?i)\blugar\s+de\s+nacimiento\b[^\n]*\n([^\n]{3,80})'
 )
-# Estrategia 2 (respaldo): buscar patrón Provincia Panamá + País directamente
 _PROVINCIA_RE = re.compile(
     r'(?i)\b(?:Panam[aá]\s+Oeste|Panam[aá]\s+Este|Panam[aá]\s+Centro|'
-    r'Chiqu[ií]|Chiriqu[ií]|Cocl[eé]|Col[oó]n|Dari[eé]n|Herrera|'
+    r'Chiriqu[ií]|Chiqu[ií]|Cocl[eé]|Col[oó]n|Dari[eé]n|Herrera|'
     r'Los\s+Santos|Veraguas|Bocas\s+del\s+Toro|Guna\s+Yala|'
     r'Ember[aá]|Ng[aä]be|Ngobe|Wargand[ií])\b'
 )
@@ -105,9 +119,8 @@ _PAIS_RE = re.compile(
     r'(?i)\b(?:Panam[aá]|Venezuela|Colombia|Costa\s*Rica|M[eé]xico|Ecuador|Per[uú]|'
     r'Rep[uú]blica\s+Dominicana|Cuba|El\s+Salvador|Honduras|Nicaragua|Guatemala|Bolivia)\b'
 )
-# Si el valor capturado contiene keywords de encabezado → falso positivo
 _NACIMIENTO_HEADER_RE = re.compile(
-    r'(?i)\b(?:fecha|cedula|c[eé]dula|civil|nacionalidad|vto|estado|nacimiento)\b'
+    r'(?i)\b(?:fecha|cedula|c[eé]dula|civil|vto\.?|estado|nacimiento|nacionalidad)\b'
 )
 
 # VL-08 – Efectividades
@@ -229,9 +242,13 @@ def val_referencias(text: str) -> ValidationResult:
 def val_cargo_posicion(text: str) -> ValidationResult:
     """VL-05: Posición/cargo presente y con contenido.
 
-    El formulario es una tabla donde la primera fila tiene los labels
-    (CARGO O POSICIÓN | SALARIO | TELÉFONO...) y la segunda tiene los
-    valores (Cabo 1Ero | 1200... ). Se salta la línea del label.
+    Estrategia principal: buscar el patrón
+      TIPO_CLIENTE (Gobierno|Privado...) + CARGO_WORDS + NÚMERO_SALARIO
+    directamente en el texto concatenado de PaddleOCR, sin depender de
+    saltos de línea de tabla que son poco fiables.
+
+    Estrategia de respaldo: línea siguiente al label 'CARGO O POSICIÓN'
+    usando \\b para no hacer substring match en 'OPOSICION'.
     """
     has_label = bool(_CARGO_LABEL_RE.search(text))
     if not has_label:
@@ -243,19 +260,34 @@ def val_cargo_posicion(text: str) -> ValidationResult:
             detail="No se encontró campo de cargo/posición. Afecta hoja de datos y Cocotito pág. 1 y 2.",
         )
 
-    # Intentar capturar la línea siguiente al label (donde está el valor)
+    # ── Estrategia 1: TIPO_CLIENTE → CARGO → SALARIO ──────────────────────
+    tipo_match = _CARGO_FROM_TIPO_CLIENTE_RE.search(text)
+    if tipo_match:
+        cargo = tipo_match.group(1).strip()
+        if cargo and len(cargo) >= 2 and not _CARGO_HEADER_KW_RE.search(cargo):
+            return ValidationResult(
+                code="VL-05",
+                label="Posición / Cargo",
+                passed=True,
+                severity="error",
+                detail=f"Cargo detectado: «{cargo[:60]}». Verificar coincidencia con carta de trabajo.",
+            )
+
+    # ── Estrategia 2: siguiente línea al label con \b correcto ─────────────
     next_line_match = _CARGO_NEXT_LINE_RE.search(text)
     if next_line_match:
         raw_value = next_line_match.group(1).strip()
-        # Quitar el prefijo de TIPO DE CLIENTE si está al inicio
-        # ej: "Gobierno Enfermera Basica 1200.01..." → "Enfermera Basica 1200.01..."
-        value = _TIPO_CLIENTE_PREFIX_RE.sub("", raw_value).strip()
-        # Tomar solo hasta el primer número de salario (cortar en dígitos de 4+)
-        salary_match = re.search(r'\s+\d{3,}[\s,.]', value)
-        if salary_match:
-            value = value[:salary_match.start()].strip()
-        is_still_header = bool(_CARGO_HEADER_RE.search(value))
-        if not is_still_header and len(value) >= 2:
+        # Quitar TIPO DE CLIENTE al inicio si lo hay
+        tipo_prefix = re.match(
+            r'(?i)^(?:Gobierno|Privado|Independiente|Jubilado|Pensionado|P[uú]blico|Mixto)\s+',
+            raw_value
+        )
+        value = raw_value[tipo_prefix.end():].strip() if tipo_prefix else raw_value
+        # Cortar antes del primer monto de salario
+        m = re.search(r'\s+\d{3,}[\s,.]', value)
+        if m:
+            value = value[:m.start()].strip()
+        if not _CARGO_HEADER_KW_RE.search(value) and len(value) >= 2:
             return ValidationResult(
                 code="VL-05",
                 label="Posición / Cargo",
@@ -269,59 +301,91 @@ def val_cargo_posicion(text: str) -> ValidationResult:
         label="Posición / Cargo",
         passed=False,
         severity="error",
-        detail="Campo 'Cargo/Posición' encontrado pero el valor no es legible. Verificar en hoja de datos y Cocotito pág. 1 y 2.",
+        detail="Campo 'Cargo/Posición' encontrado pero valor no legible. Verificar en hoja de datos y Cocotito pág. 1 y 2.",
     )
 
 
 def val_rango_salarial(text: str) -> ValidationResult:
-    """VL-06: Rango salarial presente y con valor numérico visible."""
+    """VL-06: Rango salarial presente con valor numérico >= 100.
+
+    Busca el monto únicamente en la ventana de texto que rodea la
+    palabra clave SALARIO, evitando capturar números de cédula u otros.
+    """
     has_keyword = bool(_SALARIO_KEYWORD_RE.search(text))
-    amounts = _SALARY_AMOUNT_RE.findall(text)
-    has_amount = len(amounts) > 0
-    passed = has_keyword and has_amount
     if not has_keyword:
-        detail = "No se encontró campo de salario/sueldo. Verificar coincidencia con carta de trabajo."
-    elif not has_amount:
-        detail = "Campo de salario encontrado pero sin monto numérico detectable."
-    else:
-        detail = f"Monto detectado: {amounts[0]}. Verificar que coincida con la carta de trabajo."
+        return ValidationResult(
+            code="VL-06",
+            label="Rango salarial",
+            passed=False,
+            severity="error",
+            detail="No se encontró campo de salario/sueldo. Verificar coincidencia con carta de trabajo.",
+        )
+
+    # Buscar el monto en la ventana posterior al keyword SALARIO
+    salary_kw = _SALARIO_KEYWORD_RE.search(text)
+    window_start = salary_kw.start()
+    window_end = min(len(text), window_start + _SALARY_CONTEXT_WINDOW * 5)  # ~5 filas
+    window = text[window_start:window_end]
+
+    range_match = _SALARY_RANGE_RE.search(window)
+    if range_match and range_match.group(1):
+        monto1 = range_match.group(1)
+        monto2 = range_match.group(2)
+        # Filtrar: el monto debe ser >= 100 (evitar números de 3 dígitos de cédula como 762)
+        try:
+            val1 = float(monto1.replace(',', ''))
+            val2 = float(monto2.replace(',', '')) if monto2 else val1
+            if val1 >= 100:
+                rango_str = f"{monto1} - {monto2}" if monto2 else monto1
+                return ValidationResult(
+                    code="VL-06",
+                    label="Rango salarial",
+                    passed=True,
+                    severity="error",
+                    detail=f"Monto detectado: {rango_str}. Verificar que coincida con la carta de trabajo.",
+                )
+        except (ValueError, AttributeError):
+            pass
+
     return ValidationResult(
         code="VL-06",
         label="Rango salarial",
-        passed=passed,
+        passed=False,
         severity="error",
-        detail=detail,
+        detail="Campo 'Salario' encontrado pero sin monto numérico válido (>= 100). Verificar con carta de trabajo.",
     )
 
 
 def val_lugar_nacimiento(text: str) -> ValidationResult:
-    """VL-07: Lugar de nacimiento debe tener Provincia + País.
+    """VL-07: Lugar de nacimiento debe contener una Provincia panameña.
 
-    El campo está en una tabla: fila 1 tiene el label, fila 2 el valor.
-    Estrategia 1: capturar la línea siguiente al label.
-    Estrategia 2 (respaldo): buscar patrón Provincia panameña en todo el texto.
+    NUEVA ESTRATEGIA:
+    - Estrategia 1 (principal): buscar una Provincia panameña directamente
+      en el texto completo. Si la encuentra, el lugar está presente.
+    - Estrategia 2 (complemento): línea siguiente al label '\\blugar de nacimiento'
+      (con \\b para evitar substring match). Si el campo no contiene keywords
+      de encabezado, se muestra como detalle adicional.
     """
     has_label = bool(_NACIMIENTO_LABEL_RE.search(text))
 
-    # Estrategia 1: línea siguiente al label
-    value = None
+    # ── Estrategia 1 (principal): buscar provincia panameña en todo el doc ──
+    provincia_match = _PROVINCIA_RE.search(text)
+    provincia_str = provincia_match.group(0).strip() if provincia_match else None
+
+    # Verificar si cerca de la provincia aparece el país
+    pais_near = False
+    if provincia_match:
+        start = max(0, provincia_match.start() - 20)
+        end = min(len(text), provincia_match.end() + 60)
+        pais_near = bool(_PAIS_RE.search(text[start:end]))
+
+    # ── Estrategia 2 (complemento): capturar la línea siguiente al label ──
+    next_line_value = None
     next_line_match = _NACIMIENTO_NEXT_LINE_RE.search(text)
     if next_line_match:
         candidate = next_line_match.group(1).strip()
-        is_header = bool(_NACIMIENTO_HEADER_RE.search(candidate))
-        if not is_header and len(candidate) >= 3:
-            value = candidate
-
-    # Estrategia 2: buscar patrón Provincia panameña + País en todo el texto
-    provincia_found = _PROVINCIA_RE.search(text)
-    pais_near = None
-    if provincia_found:
-        # Buscar "Panamá" cerca de la provincia (en un rango de 60 chars)
-        start = max(0, provincia_found.start() - 10)
-        end = min(len(text), provincia_found.end() + 50)
-        nearby = text[start:end]
-        if _PAIS_RE.search(nearby):
-            pais_near = provincia_found.group(0)
+        if not _NACIMIENTO_HEADER_RE.search(candidate) and len(candidate) >= 3:
+            next_line_value = candidate
 
     if not has_label:
         return ValidationResult(
@@ -332,33 +396,46 @@ def val_lugar_nacimiento(text: str) -> ValidationResult:
             detail="Campo 'Lugar de nacimiento' ausente. Afecta hoja de datos y Cocotito pág. 1.",
         )
 
-    # Evaluar resultado con lo que se pudo capturar
-    has_country_in_value = bool(_PAIS_RE.search(value or ""))
-    has_provincia = pais_near is not None
-    passed = bool((has_country_in_value and value) or has_provincia)
+    # Una provincia panameña en el documento es suficiente para PASSED
+    if provincia_str:
+        if next_line_value and not _NACIMIENTO_HEADER_RE.search(next_line_value):
+            lugar = next_line_value[:60]
+        else:
+            lugar = f"{provincia_str}, Panamá" if pais_near else provincia_str
+        return ValidationResult(
+            code="VL-07",
+            label="Lugar de nacimiento (Provincia + País)",
+            passed=True,
+            severity="error",
+            detail=f"Lugar de nacimiento detectado: «{lugar}»",
+        )
 
-    if passed:
-        lugar = value[:60] if value and has_country_in_value else f"Provincia: {pais_near}, Panamá"
-        detail = f"Lugar de nacimiento detectado: «{lugar}»"
-    elif value:
-        detail = (
-            f"Valor «{value[:60]}» no incluye el país. "
-            "Debe indicar Provincia + País (ej. 'Panamá Oeste, Panamá'). "
-            "Afecta hoja de datos y Cocotito pág. 1."
+    # Si hay valor de siguiente línea aunque sea sin provincia
+    if next_line_value:
+        return ValidationResult(
+            code="VL-07",
+            label="Lugar de nacimiento (Provincia + País)",
+            passed=False,
+            severity="error",
+            detail=(
+                f"Valor «{next_line_value[:60]}» no incluye provincia panameña. "
+                "Debe indicar Provincia + País (ej. 'Chiriquí, Panamá'). "
+                "Afecta hoja de datos y Cocotito pág. 1."
+            ),
         )
-    else:
-        detail = (
-            "Campo encontrado pero valor ilegible o en blanco. "
-            "Debe indicar Provincia + País (ej. 'Panamá Oeste, Panamá'). "
-            "Afecta hoja de datos y Cocotito pág. 1."
-        )
+
     return ValidationResult(
         code="VL-07",
         label="Lugar de nacimiento (Provincia + País)",
-        passed=passed,
+        passed=False,
         severity="error",
-        detail=detail,
+        detail=(
+            "Campo encontrado pero valor ilegible o en blanco. "
+            "Debe indicar Provincia + País (ej. 'Chiriquí, Panamá'). "
+            "Afecta hoja de datos y Cocotito pág. 1."
+        ),
     )
+
 
 
 def val_efectividades(text: str) -> ValidationResult:
