@@ -56,6 +56,7 @@ services:
       - "8000:8000"
     volumes:
       - ./ocr_microservice/models_ml:/app/models_ml
+      - paddleocr_cache:/root/.paddleocr    # modelos OCR persistentes entre reinicios
     networks:
       - odoo_net
     healthcheck:
@@ -63,11 +64,12 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 120s   # más tiempo para la primera descarga de modelos
 
 volumes:
   odoo_db_data:
   odoo_data:
+  paddleocr_cache:    # cache de modelos PaddleOCR (det + rec + cls)
 
 networks:
   odoo_net:

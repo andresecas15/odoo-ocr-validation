@@ -38,6 +38,15 @@ RUN mkdir -p /app/models_ml
 EXPOSE 8000
 
 # Comando de arranque
-# Número de workers: ajustar según RAM disponible (cada worker carga PaddleOCR + YOLO en memoria)
-# Recomendado: 2-4 workers para servidores con ≥8GB RAM
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+# Estrategia multi-worker correcta para modelos ML pesados:
+# - gunicorn actúa como process manager
+# - --preload: carga el app (y los modelos PaddleOCR/YOLO) UNA vez en el padre
+#   antes de forkear los workers → evita race conditions de descarga simultánea
+# - -w 4: 4 workers (ajustar según RAM; cada worker hereda los modelos via CoW)
+# - UvicornWorker: mantiene el loop async de FastAPI
+CMD ["gunicorn", "main:app", \
+     "-w", "4", \
+     "-k", "uvicorn.workers.UvicornWorker", \
+     "--bind", "0.0.0.0:8000", \
+     "--preload", \
+     "--timeout", "180"]
