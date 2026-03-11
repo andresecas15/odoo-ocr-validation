@@ -34,14 +34,36 @@ COPY *.py .
 # Crear directorio para modelos ML (se monta como volumen en compose)
 RUN mkdir -p /app/models_ml
 
-# Pre-descargar los modelos de PaddleOCR durante el BUILD
-# Esto evita que los workers compitan por descargarlos en runtime (FileNotFoundError)
-# Los modelos quedan en /root/.paddleocr/ dentro de la imagen (~500MB)
-RUN python -c "\
-from paddleocr import PaddleOCR; \
-print('Descargando modelos PaddleOCR (det + rec + cls)...'); \
-PaddleOCR(use_angle_cls=True, lang='es', show_log=False, use_gpu=False); \
-print('Modelos PaddleOCR descargados correctamente.')"
+# Pre-descargar los modelos de PaddleOCR durante el BUILD via wget
+# Se descargan directamente desde el CDN de PaddlePaddle sin ejecutar el runtime
+# (evita el segfault que ocurría al instanciar PaddleOCR() en Docker build)
+# Modelos necesarios con lang='es' (usa det=en, rec=latin, cls=ch):
+RUN mkdir -p \
+      /root/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer \
+      /root/.paddleocr/whl/rec/latin/latin_PP-OCRv3_rec_infer \
+      /root/.paddleocr/whl/cls/ch_ppocr_mobile_v2.0_cls_infer && \
+    # Detection model
+    wget -q --show-progress --timeout=120 \
+      https://paddleocr.bj.bcebos.com/PP-OCRv3/english/en_PP-OCRv3_det_infer.tar \
+      -O /root/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer/en_PP-OCRv3_det_infer.tar && \
+    tar -xf /root/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer/en_PP-OCRv3_det_infer.tar \
+      -C /root/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer/ && \
+    # Recognition model (latin)
+    wget -q --show-progress --timeout=120 \
+      https://paddleocr.bj.bcebos.com/PP-OCRv3/multilingual/latin_PP-OCRv3_rec_infer.tar \
+      -O /root/.paddleocr/whl/rec/latin/latin_PP-OCRv3_rec_infer/latin_PP-OCRv3_rec_infer.tar && \
+    tar -xf /root/.paddleocr/whl/rec/latin/latin_PP-OCRv3_rec_infer/latin_PP-OCRv3_rec_infer.tar \
+      -C /root/.paddleocr/whl/rec/latin/latin_PP-OCRv3_rec_infer/ && \
+    # Classifier model
+    wget -q --show-progress --timeout=120 \
+      https://paddleocr.bj.bcebos.com/dygraph_v2.0/ch/ch_ppocr_mobile_v2.0_cls_infer.tar \
+      -O /root/.paddleocr/whl/cls/ch_ppocr_mobile_v2.0_cls_infer/ch_ppocr_mobile_v2.0_cls_infer.tar && \
+    tar -xf /root/.paddleocr/whl/cls/ch_ppocr_mobile_v2.0_cls_infer/ch_ppocr_mobile_v2.0_cls_infer.tar \
+      -C /root/.paddleocr/whl/cls/ch_ppocr_mobile_v2.0_cls_infer/ && \
+    echo "Modelos PaddleOCR descargados y extraídos correctamente." && \
+    # Limpiar los .tar para reducir tamaño de imagen
+    find /root/.paddleocr -name "*.tar" -delete
+
 
 # Puerto de exposición
 EXPOSE 8000
