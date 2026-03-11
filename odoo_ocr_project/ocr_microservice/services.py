@@ -29,8 +29,16 @@ def load_models() -> None:
         ocr_model = PaddleOCR(use_angle_cls=True, lang="es", show_log=False, use_gpu=False)
         logger.info("PaddleOCR cargado exitosamente.")
     except Exception as exc:
-        logger.error("Error al cargar PaddleOCR: %s", exc)
-        raise RuntimeError(f"No se pudo inicializar PaddleOCR: {exc}") from exc
+        logger.warning(
+            "═══════════════════════════════════════════════════════════════\n"
+            "  ⚠️  PaddleOCR NO PUDO INICIALIZARSE\n"
+            "  Error: %s\n"
+            "  → El servicio arrancará SIN extracción de texto/fechas.\n"
+            "  → Revisa la conexión a internet o los modelos en /root/.paddleocr/\n"
+            "═══════════════════════════════════════════════════════════════",
+            exc,
+        )
+        ocr_model = None
 
     if os.path.isfile(YOLO_MODEL_PATH):
         logger.info("Cargando modelo YOLO desde '%s'...", YOLO_MODEL_PATH)

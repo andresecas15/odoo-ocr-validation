@@ -34,6 +34,15 @@ COPY *.py .
 # Crear directorio para modelos ML (se monta como volumen en compose)
 RUN mkdir -p /app/models_ml
 
+# Pre-descargar los modelos de PaddleOCR durante el BUILD
+# Esto evita que los workers compitan por descargarlos en runtime (FileNotFoundError)
+# Los modelos quedan en /root/.paddleocr/ dentro de la imagen (~500MB)
+RUN python -c "\
+from paddleocr import PaddleOCR; \
+print('Descargando modelos PaddleOCR (det + rec + cls)...'); \
+PaddleOCR(use_angle_cls=True, lang='es', show_log=False, use_gpu=False); \
+print('Modelos PaddleOCR descargados correctamente.')"
+
 # Puerto de exposición
 EXPOSE 8000
 
