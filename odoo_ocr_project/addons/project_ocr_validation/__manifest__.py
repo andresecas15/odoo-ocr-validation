@@ -1,6 +1,6 @@
 {
     "name": "Validación OCR de Documentos",
-    "version": "16.0.1.0.0",
+    "version": "16.0.1.1.0",
     "category": "Project",
     "summary": "Análisis de documentos PDF con OCR y detección de firmas/huellas dactilares",
     "description": """
