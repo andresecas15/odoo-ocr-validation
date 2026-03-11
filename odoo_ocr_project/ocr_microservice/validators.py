@@ -58,18 +58,27 @@ _REF_BANCARIA_RE = re.compile(r'(?i)referencia\s*bancaria')
 _REF_PERSONAL_RE = re.compile(r'(?i)referencia\s*personal')
 
 # VL-05 – Cargo / Posición
-# La tabla OCR produce: línea 1 = [CARGO O POSICIÓN | SALARIO | TELÉFONO...]
-#                        línea 2 = [Cabo 1Ero | 1200 | 520-6100...]
-# Se salta la línea del label y se toma el primer token de la siguiente.
+# La tabla OCR produce:
+#   Fila headers: TIPO DE CLIENTE | CARGO O POSICIÓN | SALARIO | TELÉFONO
+#   Fila valores: Gobierno         | Enfermera Basica | 1200.01 | -----
+# PaddleOCR concatena en una sola línea: 
+#   "CARGO O POSICIÓN SALARIO TELÉFONO\nGobierno Enfermera Basica 1200.01..."
+# Estrategia: saltar la línea del header y en la siguiente línea:
+#   1) Si empieza con TIPO DE CLIENTE (Gobierno/Privado/etc.) → quitarlo
+#   2) Tomar el texto que sigue como cargo real
 _CARGO_LABEL_RE = re.compile(
-    r'(?i)(?:cargo\s+o\s+posici[oó]n|posici[oó]n|ocupaci[oó]n|profesi[oó]n)'
+    r'(?i)(?:cargo\s+o\s+posici[oó]n|posici[oó]n\s+u\s+oficio|posici[oó]n|ocupaci[oó]n|profesi[oó]n\s+u\s+oficio|profesi[oó]n)'
 )
 _CARGO_NEXT_LINE_RE = re.compile(
-    r'(?i)(?:cargo\s+o\s+posici[oó]n|posici[oó]n|ocupaci[oó]n|profesi[oó]n)[^\n]*\n([^\n]{3,80})'
+    r'(?i)(?:cargo\s+o\s+posici[oó]n|posici[oó]n|ocupaci[oó]n|profesi[oó]n)[^\n]*\n([^\n]{3,150})'
 )
-# Palabras que indican que lo capturado aun es un encabezado
+# Valores de TIPO DE CLIENTE que pueden aparecer al inicio de la fila de valores
+_TIPO_CLIENTE_PREFIX_RE = re.compile(
+    r'(?i)^(?:Gobierno|Privado|Independiente|Jubilado|Pensionado|Público|Mixto)\s+'
+)
+# Palabras que indican que lo capturado aún es un encabezado de tabla
 _CARGO_HEADER_RE = re.compile(
-    r'(?i)\b(?:salario|tel[eé]fono|ingresos|otros|gobierno|planilla|nombre|cargo|posici)\b',
+    r'(?i)\b(?:salario|tel[eé]fono|ingresos|planilla|cargo\so\s|tipo\sde\scliente)\b',
 )
 
 # VL-06 – Rango salarial
@@ -237,8 +246,14 @@ def val_cargo_posicion(text: str) -> ValidationResult:
     # Intentar capturar la línea siguiente al label (donde está el valor)
     next_line_match = _CARGO_NEXT_LINE_RE.search(text)
     if next_line_match:
-        value = next_line_match.group(1).strip()
-        # Tomar solo el primer token antes de múltiples palabras-header
+        raw_value = next_line_match.group(1).strip()
+        # Quitar el prefijo de TIPO DE CLIENTE si está al inicio
+        # ej: "Gobierno Enfermera Basica 1200.01..." → "Enfermera Basica 1200.01..."
+        value = _TIPO_CLIENTE_PREFIX_RE.sub("", raw_value).strip()
+        # Tomar solo hasta el primer número de salario (cortar en dígitos de 4+)
+        salary_match = re.search(r'\s+\d{3,}[\s,.]', value)
+        if salary_match:
+            value = value[:salary_match.start()].strip()
         is_still_header = bool(_CARGO_HEADER_RE.search(value))
         if not is_still_header and len(value) >= 2:
             return ValidationResult(

@@ -26,6 +26,7 @@
     ],
     "data": [
         "security/ir.model.access.csv",
+        "data/sequence_data.xml",
         "views/ocr_document_views.xml",
         "views/loan_document_views.xml",
     ],

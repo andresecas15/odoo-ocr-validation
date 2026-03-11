@@ -69,6 +69,10 @@ class LoanDocument(models.Model):
     name = fields.Char(
         string="Nombre del Documento",
         required=True,
+        copy=False,
+        readonly=True,
+        states={"draft": [("readonly", False)]},
+        default=lambda self: _("Nuevo"),
         tracking=True,
     )
     loan_type = fields.Selection(
@@ -80,13 +84,14 @@ class LoanDocument(models.Model):
         required=True,
         tracking=True,
     )
-    attachment_id = fields.Many2one(
-        comodel_name="ir.attachment",
+    # Archivo PDF — subida directa (binary)
+    pdf_file = fields.Binary(
         string="Archivo PDF",
         required=True,
-        domain=[("mimetype", "=", "application/pdf")],
-        help="PDF del expediente de préstamo a validar.",
+        attachment=True,
+        help="Sube el PDF del expediente de préstamo a validar.",
     )
+    pdf_filename = fields.Char(string="Nombre del archivo PDF")
     state = fields.Selection(
         selection=[
             ("draft", "Borrador"),
@@ -120,13 +125,24 @@ class LoanDocument(models.Model):
     total_warnings = fields.Integer(string="Avisos", default=0, readonly=True)
     error_message = fields.Text(string="Mensaje de Error", readonly=True)
 
+    # ── ORM overrides ─────────────────────────────────────────────────────────
+
+    @api.model
+    def create(self, vals):
+        if vals.get("name", _("Nuevo")) in (_("Nuevo"), False, ""):
+            vals["name"] = (
+                self.env["ir.sequence"].next_by_code("project.loan.document")
+                or _("Nuevo")
+            )
+        return super().create(vals)
+
     # ── Acciones ─────────────────────────────────────────────────────────────
 
     def action_validate_loan(self):
         """Orquesta el flujo de validación: enviar PDF → recibir resultados → guardar."""
         self.ensure_one()
 
-        if not self.attachment_id or not self.attachment_id.datas:
+        if not self.pdf_file:
             raise UserError(_("Debe adjuntar un archivo PDF antes de ejecutar la validación."))
 
         self.write({"state": "processing", "error_message": False})
@@ -138,9 +154,16 @@ class LoanDocument(models.Model):
         )
 
         try:
+            # El campo binary devuelve bytes (Odoo 16 ya no usa b64decode aquí)
+            pdf_bytes = self.pdf_file  # bytes en base64
+            if isinstance(pdf_bytes, bytes):
+                file_data = pdf_bytes.decode("utf-8")
+            else:
+                file_data = pdf_bytes
+
             payload = {
-                "filename": self.attachment_id.name or self.name,
-                "file_data": self.attachment_id.datas.decode("utf-8"),
+                "filename": self.pdf_filename or self.name,
+                "file_data": file_data,
             }
             _logger.info(
                 "Enviando PDF '%s' (ID: %s) al validador de préstamos: %s",
