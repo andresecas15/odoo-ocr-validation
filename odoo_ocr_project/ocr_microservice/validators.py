@@ -36,21 +36,34 @@ _CEDULA_RE = re.compile(
 )
 
 # VL-02 – Motivo de préstamo
+# Captura el VALOR justo después del label «motivo [de préstamo]»
+# Se limita a 80 chars y exige al menos 3 palabras para evitar capturar
+# encabezados de tabla ("OFICIAL DE CRÉDITO Jeyse...").
 _MOTIVO_KEYWORD_RE = re.compile(r'(?i)\bmotivo\b')
 _MOTIVO_VALUE_RE = re.compile(
-    r'(?i)\bmotivo\s*(?:de\s*pr[eé]stamo)?\s*[:\-]?\s*([^\n]{8,})'
+    r'(?i)\bmotivo\s*(?:de\s*pr[eé]stamo)?\s*[:\-=]?\s*'
+    r'([A-Za-záéíóúÁÉÍÓÚñÑ][^\n\r]{4,80})'
+)
+# Palabras de encabezado que indican falso positivo en VL-02
+_MOTIVO_FALSE_POSITIVE_RE = re.compile(
+    r'(?i)\b(?:oficial|cr[eé]dito|firma|verie|planilla|nombre|tel[eé]fono)\b'
 )
 
-# VL-03 – Número de Seguro Social (CSS Panamá: dígitos con guiones)
-_NSS_RE = re.compile(r'\b\d{1,3}-\d{2,4}-\d{3,6}\b')
+# VL-03 – Número de Seguro Social (CSS Panamá)
+# Formato: 8-123-45678 (1-2 dígitos – 2-4 dígitos – 4-6 dígitos)
+_NSS_RE = re.compile(r'\b(?:[1-9]-\d{2,4}-\d{4,6}|[1-9]-\d{3,5})\b')
 
 # VL-04 – Referencias
 _REF_BANCARIA_RE = re.compile(r'(?i)referencia\s*bancaria')
 _REF_PERSONAL_RE = re.compile(r'(?i)referencia\s*personal')
 
 # VL-05 – Cargo / Posición
+# Excluye resultados con múltiples keywords de encabezado de tabla
 _CARGO_VALUE_RE = re.compile(
-    r'(?i)(?:cargo|posici[oó]n|ocupaci[oó]n)\s*[:\-]?\s*([^\n]{3,})'
+    r'(?i)(?:cargo|posici[oó]n|ocupaci[oó]n)\s*[:\-]?\s*([^\n]{3,60})'
+)
+_CARGO_HEADER_RE = re.compile(
+    r'(?i)(?:salario|tel[eé]fono|ingresos|otros|gobierno|planilla)', 
 )
 
 # VL-06 – Rango salarial
@@ -60,12 +73,17 @@ _SALARY_AMOUNT_RE = re.compile(
 )
 
 # VL-07 – Lugar de nacimiento (Provincia + País)
+# Captura máximo 60 chars después del label para no incluir otros campos
 _NACIMIENTO_RE = re.compile(
-    r'(?i)lugar\s+de\s+nacimiento\s*[:\-]?\s*([^\n]+)'
+    r'(?i)lugar\s+de\s+nacimiento\s*[:\-]?\s*([A-Za-záéíóúÁÉÍÓÚñÑ ,]{4,60})'
 )
 _PAIS_RE = re.compile(
     r'(?i)\b(?:Panam[áa]|Venezuela|Colombia|Costa\s*Rica|M[eé]xico|Ecuador|Per[uú]|'
     r'Rep[uú]blica\s+Dominicana|Cuba|El\s+Salvador|Honduras|Nicaragua|Guatemala|Bolivia)\b'
+)
+# Si el valor capturado contiene keywords de encabezado → falso positivo
+_NACIMIENTO_HEADER_RE = re.compile(
+    r'(?i)\b(?:fecha|cedula|c[eé]dula|civil|nacionalidad|vto|estado)\b'
 )
 
 # VL-08 – Efectividades
@@ -79,8 +97,10 @@ _PLANILLA_FIELD_RE = re.compile(r'(?i)\bplanilla\b')
 _PLANILLA_NUM_RE = re.compile(r'\b\d+-\d+(?:-\d+)?\b')
 
 # VL-11 – Dirección (longitud)
+# Captura máximo 200 chars para evitar leer el documento completo
+# cuando PaddleOCR no inserta saltos de línea
 _DIRECCION_RE = re.compile(
-    r'(?i)(?:direcci[oó]n|domicilio)\s*[:\-]?\s*([^\n]+)'
+    r'(?i)(?:direcci[oó]n|domicilio)\s*[:\-]?\s*([^\n\r]{5,200})'
 )
 _ADDRESS_MAX_CHARS = 120
 
@@ -119,11 +139,16 @@ def val_motivo_prestamo(text: str) -> ValidationResult:
     """VL-02: Hoja de datos contiene motivo de préstamo con contenido."""
     keyword = bool(_MOTIVO_KEYWORD_RE.search(text))
     value_match = _MOTIVO_VALUE_RE.search(text)
-    passed = bool(value_match and value_match.group(1).strip())
+    # Verificar falso positivo: el match capturó un encabezado de tabla
+    is_false_positive = (
+        value_match is not None
+        and bool(_MOTIVO_FALSE_POSITIVE_RE.search(value_match.group(1)))
+    )
+    passed = bool(value_match and value_match.group(1).strip() and not is_false_positive)
     if not keyword:
         detail = "Campo 'Motivo de préstamo' ausente en el documento."
-    elif not passed:
-        detail = "Campo 'Motivo' encontrado pero aparece vacío o sin descripción."
+    elif not value_match or is_false_positive:
+        detail = "Campo 'Motivo' encontrado pero el valor parece estar en blanco o no es legible."
     else:
         detail = f"Motivo detectado: «{value_match.group(1).strip()[:80]}»"
     return ValidationResult(
@@ -180,11 +205,16 @@ def val_referencias(text: str) -> ValidationResult:
 def val_cargo_posicion(text: str) -> ValidationResult:
     """VL-05: Posición/cargo presente y con contenido (afecta hoja de datos y Cocotito pág. 1 y 2)."""
     match = _CARGO_VALUE_RE.search(text)
-    passed = bool(match and match.group(1).strip())
+    # Falso positivo si el valor inmediato es un encabezado de tabla
+    is_header = (
+        match is not None
+        and bool(_CARGO_HEADER_RE.search(match.group(1)))
+    )
+    passed = bool(match and match.group(1).strip() and not is_header)
     detail = (
         f"Cargo detectado: «{match.group(1).strip()[:60]}»"
         if passed
-        else "No se encontró campo de cargo/posición con contenido. Verificar coincidencia con carta de trabajo. Afecta hoja de datos y Cocotito pág. 1 y 2."
+        else "No se encontró campo de cargo/posición con valor legible. Verificar coincidencia con carta de trabajo. Afecta hoja de datos y Cocotito pág. 1 y 2."
     )
     return ValidationResult(
         code="VL-05",
@@ -219,13 +249,18 @@ def val_rango_salarial(text: str) -> ValidationResult:
 def val_lugar_nacimiento(text: str) -> ValidationResult:
     """VL-07: Lugar de nacimiento debe tener Provincia + País (afecta hoja de datos y Cocotito pág. 1)."""
     match = _NACIMIENTO_RE.search(text)
-    if not match:
+    # Verificar si el match capturó un encabezado de tabla en vez del valor real
+    is_header = (
+        match is not None
+        and bool(_NACIMIENTO_HEADER_RE.search(match.group(1)))
+    )
+    if not match or is_header:
         return ValidationResult(
             code="VL-07",
             label="Lugar de nacimiento (Provincia + País)",
             passed=False,
             severity="error",
-            detail="Campo 'Lugar de nacimiento' ausente o en blanco. Afecta hoja de datos y solicitud Cocotito pág. 1.",
+            detail="Campo 'Lugar de nacimiento' ausente, en blanco o ilegible. Debe indicar Provincia + País (ej. 'Panamá, Panamá'). Afecta hoja de datos y solicitud Cocotito pág. 1.",
         )
     value = match.group(1).strip()
     has_country = bool(_PAIS_RE.search(value))
