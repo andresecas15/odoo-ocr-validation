@@ -84,7 +84,7 @@ _CARGO_HEADER_RE = re.compile(
 # VL-06 – Rango salarial
 _SALARIO_KEYWORD_RE = re.compile(r'(?i)\b(?:salario|sueldo|ingreso)\b')
 _SALARY_AMOUNT_RE = re.compile(
-    r'B/\.?\s*[\d,]+\.?\d*|\$\s*[\d,]+\.?\d*|\b\d{3,}(?:[.,]\d{2})?\b'
+    r'(?:B/\.?\s*|\$\s*)?[\d,]+\.?\d*(?:\s*-\s*(?:B/\.?\s*|\$\s*)?[\d,]+\.?\d*)?|\b\d{3,}(?:[.,]\d{2})?(?:\s*-\s*\d{3,}(?:[.,]\d{2})?)?\b'
 )
 
 # VL-07 – Lugar de nacimiento (Provincia + País)
