@@ -150,13 +150,13 @@ async def validate_loan(request: AnalyzeRequest) -> LoanValidationResponse:
 
     fecha_word_count, firma_word_count, fecha_value_count, fecha_valor = extract_text_statistics(extracted_text)
 
-    # Usamos run_yolo_detailed para obtener las coordenadas de los bounding boxes
-    firma_count, huella_count, boxes_firma, boxes_huella = run_yolo_detailed(images)
+    # Usamos run_yolo_detailed para obtener las coordenadas de los bounding boxes y las páginas
+    firma_count, huella_count, boxes_firma, boxes_huella, pages_firma, pages_huella = run_yolo_detailed(images)
     firma_detected = firma_count > 0
     huella_detected = huella_count > 0
 
     # Ejecutar las 13 validaciones
-    results = run_all_validations(extracted_text, firma_detected, boxes_firma, boxes_huella)
+    results = run_all_validations(extracted_text, firma_detected, boxes_firma, boxes_huella, pages_firma)
 
     total_errors = sum(1 for r in results if not r.passed and r.severity == "error")
     total_warnings = sum(1 for r in results if not r.passed and r.severity == "warning")

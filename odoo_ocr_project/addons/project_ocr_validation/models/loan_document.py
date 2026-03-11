@@ -173,7 +173,7 @@ class LoanDocument(models.Model):
                 LOAN_VALIDATE_URL,
                 json=payload,
                 headers={"Content-Type": "application/json"},
-                timeout=120,
+                timeout=300,  # 5 min: documentos grandes (19+ pgs) demoran más con OCR+YOLO
             )
             response.raise_for_status()
             result = response.json()

@@ -183,26 +183,31 @@ def run_yolo(images: list) -> tuple[int, int]:
     return firma_count, huella_count
 
 
-def run_yolo_detailed(images: list) -> tuple[int, int, list, list]:
-    """Ejecuta YOLO y retorna conteos MÁS las listas de bounding boxes por clase.
+def run_yolo_detailed(images: list) -> tuple[int, int, list, list, list[int], list[int]]:
+    """Ejecuta YOLO y retorna conteos, bounding boxes Y páginas por clase.
 
     Returns:
-        firma_count  (int)  – número de firmas detectadas
-        huella_count (int)  – número de huellas detectadas
-        boxes_firma  (list) – lista de [x1, y1, x2, y2] para cada firma
-        boxes_huella (list) – lista de [x1, y1, x2, y2] para cada huella
+        firma_count   (int)       – número de firmas detectadas
+        huella_count  (int)       – número de huellas detectadas
+        boxes_firma   (list)      – lista de [x1, y1, x2, y2] para cada firma
+        boxes_huella  (list)      – lista de [x1, y1, x2, y2] para cada huella
+        pages_firma   (list[int]) – páginas (1-indexed) con al menos 1 firma
+        pages_huella  (list[int]) – páginas (1-indexed) con al menos 1 huella
     """
     if yolo_model is None:
         logger.info("Modelo YOLO no disponible. Saltando detección detallada.")
-        return 0, 0, [], []
+        return 0, 0, [], [], [], []
 
     firma_count = 0
     huella_count = 0
     boxes_firma: list[list[float]] = []
     boxes_huella: list[list[float]] = []
+    pages_firma: list[int] = []
+    pages_huella: list[int] = []
 
     for page_idx, pil_image in enumerate(images):
         img_array = np.array(pil_image)
+        page_num = page_idx + 1  # 1-indexed para el usuario
 
         try:
             results = yolo_model.predict(
@@ -211,8 +216,11 @@ def run_yolo_detailed(images: list) -> tuple[int, int, list, list]:
                 verbose=False,
             )
         except Exception as exc:
-            logger.warning("Error en YOLO (detallado) página %d: %s", page_idx + 1, exc)
+            logger.warning("Error en YOLO (detallado) página %d: %s", page_num, exc)
             continue
+
+        page_has_firma = False
+        page_has_huella = False
 
         for result in results:
             if result.boxes is None or len(result.boxes) == 0:
@@ -226,15 +234,22 @@ def run_yolo_detailed(images: list) -> tuple[int, int, list, list]:
 
                 logger.info(
                     "Detección detallada p.%d: %s conf=%.2f%% bbox=%s",
-                    page_idx + 1, class_name, confidence * 100, coords,
+                    page_num, class_name, confidence * 100, coords,
                 )
 
                 if class_id == 0:
                     firma_count += 1
                     boxes_firma.append(coords)
+                    page_has_firma = True
                 elif class_id == 1:
                     huella_count += 1
                     boxes_huella.append(coords)
+                    page_has_huella = True
 
-    return firma_count, huella_count, boxes_firma, boxes_huella
+        if page_has_firma:
+            pages_firma.append(page_num)
+        if page_has_huella:
+            pages_huella.append(page_num)
+
+    return firma_count, huella_count, boxes_firma, boxes_huella, pages_firma, pages_huella
 

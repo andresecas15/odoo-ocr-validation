@@ -57,6 +57,11 @@ services:
     volumes:
       - ./ocr_microservice/models_ml:/app/models_ml
       - paddleocr_cache:/root/.paddleocr    # modelos OCR persistentes entre reinicios
+      # Bind mounts de código fuente para hot-reload (evita rebuild en desarrollo)
+      - ./ocr_microservice/validators.py:/app/validators.py:ro
+      - ./ocr_microservice/services.py:/app/services.py:ro
+      - ./ocr_microservice/main.py:/app/main.py:ro
+      - ./ocr_microservice/schemas.py:/app/schemas.py:ro
     networks:
       - odoo_net
     healthcheck:
