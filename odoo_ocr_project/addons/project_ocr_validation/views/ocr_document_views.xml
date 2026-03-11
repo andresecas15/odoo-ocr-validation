@@ -197,15 +197,11 @@
         </field>
     </record>
 
-        <menuitem id="menu_ocr_root"
-              name="Validación OCR"
-              web_icon="project_ocr_validation,static/description/icon.png"
-              sequence="100"/>
-
     <menuitem id="menu_ocr_documents"
-              name="Documentos"
-              parent="menu_ocr_root"
+              name="Documentos OCR (Análisis)"
+              parent="menu_loan_validation_root"
               action="action_ocr_document"
-              sequence="10"/>
+              sequence="20"/>
+
 
 </odoo>
