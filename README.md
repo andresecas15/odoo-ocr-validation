@@ -236,4 +236,4 @@ docker compose up -d
 
 ---
 
-*Módulo desarrollado por Grupo Saleta. Para consultas técnicas, revisar `DEVELOPER_NOTES.md` y `RELEASE_NOTES.md`.*
+*Módulo desarrollado para Grupo Saleta. Para consultas técnicas, revisar `RELEASE_NOTES.md`.*
