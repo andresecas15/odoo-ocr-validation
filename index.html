@@ -4,10 +4,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Diagrama de Flujo OCR - Odoo</title>
+    <title>Flujo de Validación OCR — Grupo Saleta</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* Forzamos al diagrama a tomar el máximo ancho posible */
         .mermaid {
             width: 100%;
             display: flex;
@@ -16,86 +15,260 @@
 
         .mermaid svg {
             width: 100% !important;
-            max-width: 1200px !important;
+            max-width: 1400px !important;
             height: auto !important;
-            min-height: 600px;
+            min-height: 700px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        .badge-error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .badge-warn {
+            background: #fef9c3;
+            color: #854d0e;
+        }
+
+        .badge-ok {
+            background: #dcfce7;
+            color: #166534;
         }
     </style>
 </head>
 
-<body class="bg-gray-100 min-h-screen p-4 md:p-8 font-sans flex items-center justify-center">
+<body class="bg-slate-100 min-h-screen p-4 md:p-8 font-sans">
 
-    <!-- Cambiamos max-w-5xl por max-w-7xl para hacer la tarjeta mucho más ancha -->
-    <div class="max-w-7xl w-full bg-white rounded-xl shadow-xl overflow-hidden">
-        <div class="bg-blue-900 text-white p-6 text-center">
-            <h1 class="text-2xl font-bold">Flujo de Validación OCR y Visión Computacional</h1>
-            <p class="text-blue-200 mt-2 text-sm">Odoo 16 + FastAPI + PaddleOCR + YOLO</p>
+    <div class="max-w-7xl mx-auto space-y-6">
+
+        <!-- Header -->
+        <div class="bg-blue-950 text-white p-6 rounded-xl shadow-xl text-center">
+            <h1 class="text-2xl font-bold">Flujo de Validación Documental — Préstamos Cíes y Ons</h1>
+            <p class="text-blue-300 mt-1 text-sm">Odoo 16 · FastAPI · PaddleOCR · YOLO · 13 Reglas VL</p>
         </div>
 
-        <div class="p-8 overflow-x-auto flex justify-center">
-            <!-- Contenedor del diagrama Mermaid -->
-            <pre class="mermaid text-center">
-                %%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#f3f4f6', 'lineColor': '#1e3a8a', 'fontFamily': 'sans-serif'}}}%%
-                sequenceDiagram
-                    autonumber
-                    actor Usuario
-                    participant Odoo as Odoo 16 (Gerente)
-                    participant FastAPI as FastAPI (Coordinador)
-                    participant PaddleOCR as PaddleOCR (IA Texto)
-                    participant YOLO as YOLO (IA Visual)
+        <!-- Diagrama principal -->
+        <div class="bg-white rounded-xl shadow-lg p-6 overflow-x-auto">
+            <h2 class="text-base font-semibold text-slate-700 mb-4">Flujo de extremo a extremo</h2>
+            <pre class="mermaid">
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#eff6ff', 'lineColor': '#1e3a8a', 'fontFamily': 'Inter, sans-serif', 'fontSize': '15px'}}}%%
+sequenceDiagram
+    autonumber
+    actor Oficial as Oficial de Crédito
+    participant Odoo   as Odoo 16<br/>(LoanDocument)
+    participant API    as FastAPI<br/>/validate-loan
+    participant OCR    as PaddleOCR<br/>(texto)
+    participant YOLO   as YOLO<br/>(visual)
+    participant Val    as validators.py<br/>(13 reglas VL)
 
-                    rect rgb(240, 248, 255)
-                    Note over Usuario, FastAPI: PASO 1: La Petición
-                    Usuario->>Odoo: Sube PDF y hace clic en "Analizar"
-                    Odoo->>FastAPI: Envía PDF por red interna (HTTP POST)
-                    end
+    rect rgb(239,246,255)
+    Note over Oficial, Odoo: PASO 1 — Carga del expediente
+    Oficial->>Odoo: Sube PDF + elige tipo (Cíes / Ons)
+    Oficial->>Odoo: Clic en «Validar Préstamo»
+    Odoo->>Odoo: Genera secuencia PRES/XXXX
+    Odoo->>Odoo: state = processing
+    end
 
-                    rect rgb(255, 248, 240)
-                    Note over FastAPI, YOLO: PASO 2: El Análisis
-                    FastAPI->>FastAPI: Convierte PDF a Imágenes
-                    par Análisis de Texto
-                        FastAPI->>PaddleOCR: Envía copia de imagen ("Búscame una fecha")
-                        PaddleOCR-->>FastAPI: Extrae texto y retorna: "19-02-2026"
-                    and Análisis Visual
-                        FastAPI->>YOLO: Envía copia de imagen ("Búscame firma y huella")
-                        YOLO-->>FastAPI: Detecta formas y retorna: Firma (Sí), Huella (No)
-                    end
-                    end
+    rect rgb(255,251,235)
+    Note over Odoo, YOLO: PASO 2 — Análisis en el microservicio
+    Odoo->>API: HTTP POST /api/v1/validate-loan<br/>{pdf: base64, timeout: 300s}
+    API->>API: Convierte PDF → imágenes por página
+    par Texto (PaddleOCR)
+        API->>OCR: Página 1..N → extraer texto
+        OCR-->>API: Texto completo concatenado<br/>(~50 000 chars)
+    and Visual (YOLO best.pt)
+        API->>YOLO: Página 1..N → detectar firma/huella
+        YOLO-->>API: Boxes por clase + página<br/>firma: [p5,p6,p15] | huella: []
+    end
+    end
 
-                    rect rgb(240, 255, 240)
-                    Note over FastAPI, Odoo: PASO 3: El Veredicto
-                    FastAPI->>FastAPI: Arma reporte JSON consolidado
-                    FastAPI-->>Odoo: Responde {"firma": true, "huella": false, "fecha": "19-02-2026"}
-                    end
+    rect rgb(240,253,244)
+    Note over API, Val: PASO 3 — Aplicación de las 13 reglas VL
+    API->>Val: validate_all(texto, yolo_boxes)
+    Note right of Val: VL-01 Cédula<br/>VL-02 Motivo<br/>VL-03 NSS (label+ventana)<br/>VL-04 Referencias plural<br/>VL-05 Cargo<br/>VL-06 Salario<br/>VL-07 Nacimiento<br/>VL-08 Efectividades<br/>VL-09 Firma (páginas)<br/>VL-10 Planilla<br/>VL-11 Dirección<br/>VL-12 Cónyuge / Estado civil<br/>VL-13 Proximidad huella-firma
+    Val-->>API: [{code, label, passed, severity, detail}×13]
+    API->>API: Cuenta errores y warnings<br/>Determina loan_compliance
+    API-->>Odoo: JSON {validations[13], firma, huella,<br/>fecha_valor, loan_compliance}
+    end
 
-                    rect rgb(253, 240, 255)
-                    Note over Odoo, Usuario: PASO 4: El Resultado
-                    Odoo->>Odoo: Procesa JSON y actualiza campos en BD
-                    Odoo-->>Usuario: Marca checkboxes en pantalla (Tiempo: 2-5 seg)
-                    end
+    rect rgb(253,240,255)
+    Note over Odoo, Oficial: PASO 4 — Persistencia y resultado
+    Odoo->>Odoo: Crea 13 LoanValidationLine<br/>state = done
+    Odoo->>Odoo: loan_compliance = conforme|observado|no_conforme
+    Odoo-->>Oficial: Vista con ✅/❌/⚠️ por cada regla VL
+    end
             </pre>
         </div>
 
-        <div class="bg-gray-50 p-6 border-t border-gray-200 text-sm text-gray-600">
-            <h3 class="font-bold mb-2">Resumen de la arquitectura:</h3>
-            <ul class="list-disc pl-5 space-y-1">
-                <li>El procesamiento pesado ocurre fuera del ERP para evitar bloqueos.</li>
-                <li><strong>PaddleOCR</strong> y <strong>YOLO</strong> trabajan en paralelo (al mismo tiempo) para
-                    reducir el tiempo de respuesta.</li>
-                <li>La comunicación se realiza mediante red interna.</li>
-            </ul>
+        <!-- Grid: Reglas VL + Arquitectura -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+            <!-- Tabla reglas VL -->
+            <div class="bg-white rounded-xl shadow-lg p-6">
+                <h2 class="text-base font-semibold text-slate-700 mb-3">Reglas de validación (validators.py)</h2>
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="bg-slate-50 text-slate-500 uppercase text-xs">
+                            <th class="text-left py-2 px-2 rounded-l">Código</th>
+                            <th class="text-left py-2 px-2">Regla</th>
+                            <th class="text-center py-2 px-2 rounded-r">Tipo</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100">
+                        <tr>
+                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-01</td>
+                            <td class="py-1.5 px-2">Cédula / Datos del cliente</td>
+                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                        </tr>
+                        <tr>
+                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-02</td>
+                            <td class="py-1.5 px-2">Motivo de préstamo</td>
+                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                        </tr>
+                        <tr>
+                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-03</td>
+                            <td class="py-1.5 px-2">Número de Seguro Social (NSS)</td>
+                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                        </tr>
+                        <tr>
+                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-04</td>
+                            <td class="py-1.5 px-2">Referencias bancarias y personales</td>
+                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                        </tr>
+                        <tr>
+                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-05</td>
+                            <td class="py-1.5 px-2">Posición / Cargo</td>
+                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                        </tr>
+                        <tr>
+                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-06</td>
+                            <td class="py-1.5 px-2">Rango salarial</td>
+                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                        </tr>
+                        <tr>
+                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-07</td>
+                            <td class="py-1.5 px-2">Lugar de nacimiento</td>
+                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                        </tr>
+                        <tr>
+                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-08</td>
+                            <td class="py-1.5 px-2">Efectividades en órdenes</td>
+                            <td class="text-center"><span class="badge badge-warn">Aviso</span></td>
+                        </tr>
+                        <tr>
+                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-09</td>
+                            <td class="py-1.5 px-2">Firma en cotización (páginas YOLO)</td>
+                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                        </tr>
+                        <tr>
+                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-10</td>
+                            <td class="py-1.5 px-2">Número de planilla</td>
+                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                        </tr>
+                        <tr>
+                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-11</td>
+                            <td class="py-1.5 px-2">Longitud de dirección (≤120 chars)</td>
+                            <td class="text-center"><span class="badge badge-warn">Aviso</span></td>
+                        </tr>
+                        <tr>
+                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-12</td>
+                            <td class="py-1.5 px-2">Info de cónyuge / Estado civil</td>
+                            <td class="text-center"><span class="badge badge-warn">Aviso</span></td>
+                        </tr>
+                        <tr>
+                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-13</td>
+                            <td class="py-1.5 px-2">Proximidad huella-firma</td>
+                            <td class="text-center"><span class="badge badge-warn">Aviso</span></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Arquitectura + Modelos -->
+            <div class="space-y-4">
+
+                <div class="bg-white rounded-xl shadow-lg p-6">
+                    <h2 class="text-base font-semibold text-slate-700 mb-3">Componentes del sistema</h2>
+                    <div class="space-y-3 text-sm">
+                        <div class="flex items-start gap-3">
+                            <span class="text-2xl">🐳</span>
+                            <div>
+                                <p class="font-semibold text-slate-800">ocr_engine (Docker)</p>
+                                <p class="text-slate-500">FastAPI · PaddleOCR · YOLO · 4 workers · Puerto
+                                    8000<br />Timeout límite: 300 s</p>
+                            </div>
+                        </div>
+                        <div class="flex items-start gap-3">
+                            <span class="text-2xl">🟣</span>
+                            <div>
+                                <p class="font-semibold text-slate-800">Odoo 16 (odoo_web)</p>
+                                <p class="text-slate-500">Addon <code
+                                        class="bg-slate-100 px-1 rounded">project_ocr_validation</code><br />Modelos:
+                                    <code class="bg-slate-100 px-1 rounded">project.loan.document</code> · <code
+                                        class="bg-slate-100 px-1 rounded">project.ocr.document</code></p>
+                            </div>
+                        </div>
+                        <div class="flex items-start gap-3">
+                            <span class="text-2xl">📡</span>
+                            <div>
+                                <p class="font-semibold text-slate-800">Endpoints</p>
+                                <p class="text-slate-500"><code
+                                        class="bg-slate-100 px-1 rounded">POST /api/v1/validate-loan</code> — Préstamos
+                                    (13 VL)<br /><code class="bg-slate-100 px-1 rounded">POST /api/v1/analyze-pdf</code>
+                                    — OCR genérico</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded-xl shadow-lg p-6">
+                    <h2 class="text-base font-semibold text-slate-700 mb-3">Estados de cumplimiento</h2>
+                    <div class="space-y-2 text-sm">
+                        <div class="flex items-center gap-3 p-2 bg-green-50 rounded-lg border border-green-200">
+                            <span class="text-xl">✅</span>
+                            <div>
+                                <p class="font-semibold text-green-800">Conforme</p>
+                                <p class="text-green-600 text-xs">0 errores críticos</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3 p-2 bg-yellow-50 rounded-lg border border-yellow-200">
+                            <span class="text-xl">⚠️</span>
+                            <div>
+                                <p class="font-semibold text-yellow-800">Observado — Revisión Manual</p>
+                                <p class="text-yellow-600 text-xs">Hay errores críticos o avisos; requiere revisión del
+                                    oficial</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3 p-2 bg-red-50 rounded-lg border border-red-200">
+                            <span class="text-xl">❌</span>
+                            <div>
+                                <p class="font-semibold text-red-800">No Conforme — Devolver</p>
+                                <p class="text-red-600 text-xs">Múltiples errores críticos; expediente incompleto</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
         </div>
+
+        <!-- Footer -->
+        <p class="text-center text-slate-400 text-xs pb-4">Grupo Saleta · v16.0.1.2.0 · 11 de marzo de 2026</p>
     </div>
 
-    <!-- Script para renderizar Mermaid.js -->
     <script type="module">
         import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-        // Añadimos configuración extra para aumentar el tamaño de fuente general del diagrama
         mermaid.initialize({
             startOnLoad: true,
-            themeVariables: {
-                fontSize: '18px'
-            }
+            themeVariables: { fontSize: '15px' }
         });
     </script>
 </body>
