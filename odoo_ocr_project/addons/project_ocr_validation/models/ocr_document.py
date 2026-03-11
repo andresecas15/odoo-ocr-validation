@@ -13,8 +13,6 @@ from odoo.exceptions import UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
-# URL del microservicio OCR dentro de la red Docker
-OCR_ENGINE_URL = "http://ocr_engine:8000/api/v1/analyze-pdf"
 
 
 class OcrDocument(models.Model):
@@ -158,9 +156,9 @@ class OcrDocument(models.Model):
         """Genera un resumen legible del estado de validación."""
         for record in self:
             parts = []
-            parts.append("Firma" if record.has_signature else "Firma")
-            parts.append("Huella" if record.has_fingerprint else "Huella")
-            parts.append(f"Fecha: {record.extracted_date or ''}" if record.has_date else "Fecha")
+            parts.append("✅ Firma" if record.has_signature else "❌ Firma")
+            parts.append("✅ Huella" if record.has_fingerprint else "❌ Huella")
+            parts.append(f"✅ Fecha: {record.extracted_date or ''}" if record.has_date else "❌ Fecha")
             record.validation_summary = " | ".join(parts)
 
 

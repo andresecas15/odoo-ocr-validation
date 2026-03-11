@@ -46,9 +46,12 @@ def load_models() -> None:
             yolo_model = None
     else:
         logger.warning(
-            "Archivo de modelo YOLO no encontrado en '%s'. "
-            "Coloca tu archivo 'best.pt' entrenado en la carpeta 'models_ml/'. "
-            "La detección de firmas/huellas estará deshabilitada hasta entonces.",
+            "═══════════════════════════════════════════════════════════════\n"
+            "  ⚠️  MODELO YOLO NO ENCONTRADO – detección visual DESHABILITADA\n"
+            "  Ruta esperada: %s\n"
+            "  → Entrena tu modelo y copia 'best.pt' en la carpeta models_ml/\n"
+            "  → El OCR de texto (PaddleOCR) seguirá operativo.\n"
+            "═══════════════════════════════════════════════════════════════",
             YOLO_MODEL_PATH,
         )
         yolo_model = None

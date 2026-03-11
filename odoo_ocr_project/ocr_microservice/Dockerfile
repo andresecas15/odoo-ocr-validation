@@ -38,4 +38,6 @@ RUN mkdir -p /app/models_ml
 EXPOSE 8000
 
 # Comando de arranque
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# Número de workers: ajustar según RAM disponible (cada worker carga PaddleOCR + YOLO en memoria)
+# Recomendado: 2-4 workers para servidores con ≥8GB RAM
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
