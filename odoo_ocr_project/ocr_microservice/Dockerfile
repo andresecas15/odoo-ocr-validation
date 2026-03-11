@@ -43,21 +43,21 @@ RUN mkdir -p \
       /root/.paddleocr/whl/rec/latin/latin_PP-OCRv3_rec_infer \
       /root/.paddleocr/whl/cls/ch_ppocr_mobile_v2.0_cls_infer && \
     # Detection model
-    wget -q --show-progress --timeout=120 \
+    curl -fsSL --retry 3 --max-time 120 \
       https://paddleocr.bj.bcebos.com/PP-OCRv3/english/en_PP-OCRv3_det_infer.tar \
-      -O /root/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer/en_PP-OCRv3_det_infer.tar && \
+      -o /root/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer/en_PP-OCRv3_det_infer.tar && \
     tar -xf /root/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer/en_PP-OCRv3_det_infer.tar \
       -C /root/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer/ && \
     # Recognition model (latin)
-    wget -q --show-progress --timeout=120 \
+    curl -fsSL --retry 3 --max-time 120 \
       https://paddleocr.bj.bcebos.com/PP-OCRv3/multilingual/latin_PP-OCRv3_rec_infer.tar \
-      -O /root/.paddleocr/whl/rec/latin/latin_PP-OCRv3_rec_infer/latin_PP-OCRv3_rec_infer.tar && \
+      -o /root/.paddleocr/whl/rec/latin/latin_PP-OCRv3_rec_infer/latin_PP-OCRv3_rec_infer.tar && \
     tar -xf /root/.paddleocr/whl/rec/latin/latin_PP-OCRv3_rec_infer/latin_PP-OCRv3_rec_infer.tar \
       -C /root/.paddleocr/whl/rec/latin/latin_PP-OCRv3_rec_infer/ && \
     # Classifier model
-    wget -q --show-progress --timeout=120 \
+    curl -fsSL --retry 3 --max-time 120 \
       https://paddleocr.bj.bcebos.com/dygraph_v2.0/ch/ch_ppocr_mobile_v2.0_cls_infer.tar \
-      -O /root/.paddleocr/whl/cls/ch_ppocr_mobile_v2.0_cls_infer/ch_ppocr_mobile_v2.0_cls_infer.tar && \
+      -o /root/.paddleocr/whl/cls/ch_ppocr_mobile_v2.0_cls_infer/ch_ppocr_mobile_v2.0_cls_infer.tar && \
     tar -xf /root/.paddleocr/whl/cls/ch_ppocr_mobile_v2.0_cls_infer/ch_ppocr_mobile_v2.0_cls_infer.tar \
       -C /root/.paddleocr/whl/cls/ch_ppocr_mobile_v2.0_cls_infer/ && \
     echo "Modelos PaddleOCR descargados y extraídos correctamente." && \
