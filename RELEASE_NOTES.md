@@ -40,16 +40,31 @@ Uvicorn estaba configurado con un solo worker, lo que básicamente significa que
 
 ---
 
-## Para aplicar los cambios del microservicio
+---
 
-Si estás corriendo el stack con Docker, necesitas reconstruir la imagen del motor OCR para que tome el nuevo número de workers:
+### El microservicio reventaba al arrancar si no había internet (o no había descargado los modelos de PaddleOCR)
+
+Este fue el más visible de los problemas recientes. Al levantar el contenedor, el servicio moría de inmediato con un error de gunicorn — `HaltServer: Worker failed to boot.` — y ni llegaba a responder peticiones.
+
+La raíz del problema tenía dos partes. Primera: `services.py` estaba configurado para lanzar un `RuntimeError` si PaddleOCR no podía cargar, lo que mataba directamente al worker. Segunda: PaddleOCR descarga sus modelos de detección y reconocimiento de texto la primera vez que arranca, pero con múltiples workers activos (los 4 que configuramos en la mejora anterior), todos intentaban descargar y descomprimir el mismo archivo `.tar` al mismo tiempo, pisándose entre sí y dejando el archivo a medias.
+
+Se corrigió en dos movimientos: primero, cambié el comportamiento de error de `services.py` para que en lugar de reventar, registre un aviso y siga trabajando con las capacidades que tenga disponibles — igual que ya lo hace con el modelo YOLO cuando no existe el archivo `best.pt`. Segundo, moví la descarga de modelos de PaddleOCR al momento del `docker build`, de modo que quedan incorporados directamente en la imagen. El primer build tarda un poco más, pero los arranques siguientes son limpios y sin dependencia de red.
+
+**Archivos:** `ocr_microservice/services.py`, `ocr_microservice/Dockerfile`
+
+---
+
+## Para aplicar los cambios del microservicio (versión actualizada)
+
+El fix del `Dockerfile` requiere reconstruir la imagen **sin caché** para que el paso de descarga de modelos se ejecute como corresponde:
 
 ```bash
-docker compose build ocr_engine
+docker compose build --no-cache ocr_engine
 docker compose up -d
+docker compose logs -f ocr_engine
 ```
 
-El addon de Odoo no requiere reinstalación, pero si el registro ya tenía documentos con `validation_summary` guardado en caché, puede que quieras actualizar el módulo para refrescarlos.
+El primer build tomará unos 3-5 minutos mientras descarga los modelos. A partir de ahí, cada reinicio del contenedor es inmediato.
 
 ---
 
