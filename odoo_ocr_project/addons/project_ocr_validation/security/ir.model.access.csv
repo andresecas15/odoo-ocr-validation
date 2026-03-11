@@ -1,2 +1,4 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_project_ocr_document_user,project.ocr.document.user,model_project_ocr_document,base.group_user,1,1,1,1
+access_project_loan_document_user,project.loan.document.user,model_project_loan_document,base.group_user,1,1,1,1
+access_project_loan_validation_line_user,project.loan.validation.line.user,model_project_loan_validation_line,base.group_user,1,1,1,1

@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
 from config import YOLO_MODEL_PATH, logger
-from schemas import AnalyzeRequest, AnalyzeResponse, ErrorResponse
+from schemas import AnalyzeRequest, AnalyzeResponse, ErrorResponse, LoanValidationResponse, ValidationItem
 from services import (
     decode_pdf,
     extract_text_statistics,
@@ -16,7 +16,9 @@ from services import (
     pdf_to_images,
     run_ocr,
     run_yolo,
+    run_yolo_detailed,
 )
+from validators import run_all_validations
 import services
 
 app = FastAPI(
@@ -114,6 +116,92 @@ async def analyze_pdf(request: AnalyzeRequest) -> AnalyzeResponse:
     return response
 
 
+@app.post(
+    "/api/v1/validate-loan",
+    response_model=LoanValidationResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Datos de entrada inválidos"},
+        422: {"model": ErrorResponse, "description": "Error al procesar el PDF"},
+        500: {"model": ErrorResponse, "description": "Error interno del servidor"},
+    },
+    tags=["Validación Préstamos"],
+    summary="Validar expediente de Préstamo Cíes u Ons",
+    description=(
+        "Recibe un PDF de expediente de préstamo en Base64, ejecuta OCR + YOLO "
+        "y aplica las 13 reglas de validación específicas para préstamos Cíes y Ons."
+    ),
+)
+async def validate_loan(request: AnalyzeRequest) -> LoanValidationResponse:
+    """
+    Pipeline de validación de préstamos:
+    1. Decodifica y convierte el PDF a imágenes
+    2. Extrae texto con PaddleOCR
+    3. Detecta firmas/huellas con YOLO (incluyendo bounding boxes para proximidad)
+    4. Ejecuta las 13 reglas de validación
+    5. Calcula el estado de cumplimiento (conforme / observado / no_conforme)
+    """
+    logger.info("=" * 60)
+    logger.info("Validación de préstamo: '%s'", request.filename)
+    logger.info("=" * 60)
+
+    pdf_bytes = decode_pdf(request.file_data)
+    images = pdf_to_images(pdf_bytes)
+    extracted_text = run_ocr(images)
+
+    fecha_word_count, firma_word_count, fecha_value_count, fecha_valor = extract_text_statistics(extracted_text)
+
+    # Usamos run_yolo_detailed para obtener las coordenadas de los bounding boxes
+    firma_count, huella_count, boxes_firma, boxes_huella = run_yolo_detailed(images)
+    firma_detected = firma_count > 0
+    huella_detected = huella_count > 0
+
+    # Ejecutar las 13 validaciones
+    results = run_all_validations(extracted_text, firma_detected, boxes_firma, boxes_huella)
+
+    total_errors = sum(1 for r in results if not r.passed and r.severity == "error")
+    total_warnings = sum(1 for r in results if not r.passed and r.severity == "warning")
+
+    if total_errors == 0:
+        loan_compliance = "conforme"
+    elif total_errors <= 3:
+        loan_compliance = "observado"
+    else:
+        loan_compliance = "no_conforme"
+
+    logger.info("Validación completada para '%s':", request.filename)
+    logger.info("  Errores: %d | Avisos: %d | Cumplimiento: %s", total_errors, total_warnings, loan_compliance)
+
+    return LoanValidationResponse(
+        status="success",
+        firma=firma_detected,
+        huella=huella_detected,
+        fecha_encontrada=fecha_value_count > 0,
+        fecha_valor=fecha_valor,
+        fecha_word_count=fecha_word_count,
+        fecha_value_count=fecha_value_count,
+        firma_word_count=firma_word_count,
+        firma_detected_count=firma_count,
+        detalles={
+            "paginas_procesadas": len(images),
+            "texto_extraido_longitud": len(extracted_text),
+            "yolo_disponible": services.yolo_model is not None,
+        },
+        validations=[
+            ValidationItem(
+                code=r.code,
+                label=r.label,
+                passed=r.passed,
+                severity=r.severity,
+                detail=r.detail,
+            )
+            for r in results
+        ],
+        total_errors=total_errors,
+        total_warnings=total_warnings,
+        loan_compliance=loan_compliance,
+    )
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """Captura excepciones no controladas para evitar crashes."""
@@ -124,4 +212,5 @@ async def global_exception_handler(request, exc):
             "status": "error",
             "detail": f"Error interno del servidor: {str(exc)}",
         },
+
     )

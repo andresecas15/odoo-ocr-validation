@@ -173,3 +173,60 @@ def run_yolo(images: list) -> tuple[int, int]:
                     huella_count += 1
 
     return firma_count, huella_count
+
+
+def run_yolo_detailed(images: list) -> tuple[int, int, list, list]:
+    """Ejecuta YOLO y retorna conteos MÁS las listas de bounding boxes por clase.
+
+    Returns:
+        firma_count  (int)  – número de firmas detectadas
+        huella_count (int)  – número de huellas detectadas
+        boxes_firma  (list) – lista de [x1, y1, x2, y2] para cada firma
+        boxes_huella (list) – lista de [x1, y1, x2, y2] para cada huella
+    """
+    if yolo_model is None:
+        logger.info("Modelo YOLO no disponible. Saltando detección detallada.")
+        return 0, 0, [], []
+
+    firma_count = 0
+    huella_count = 0
+    boxes_firma: list[list[float]] = []
+    boxes_huella: list[list[float]] = []
+
+    for page_idx, pil_image in enumerate(images):
+        img_array = np.array(pil_image)
+
+        try:
+            results = yolo_model.predict(
+                source=img_array,
+                conf=YOLO_CONFIDENCE_THRESHOLD,
+                verbose=False,
+            )
+        except Exception as exc:
+            logger.warning("Error en YOLO (detallado) página %d: %s", page_idx + 1, exc)
+            continue
+
+        for result in results:
+            if result.boxes is None or len(result.boxes) == 0:
+                continue
+
+            for box in result.boxes:
+                class_id = int(box.cls[0])
+                confidence = float(box.conf[0])
+                class_name = YOLO_CLASS_MAP.get(class_id, f"clase_{class_id}")
+                coords = box.xyxy[0].tolist()  # [x1, y1, x2, y2]
+
+                logger.info(
+                    "Detección detallada p.%d: %s conf=%.2f%% bbox=%s",
+                    page_idx + 1, class_name, confidence * 100, coords,
+                )
+
+                if class_id == 0:
+                    firma_count += 1
+                    boxes_firma.append(coords)
+                elif class_id == 1:
+                    huella_count += 1
+                    boxes_huella.append(coords)
+
+    return firma_count, huella_count, boxes_firma, boxes_huella
+

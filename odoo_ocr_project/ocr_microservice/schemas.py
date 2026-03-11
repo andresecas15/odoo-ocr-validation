@@ -30,3 +30,29 @@ class ErrorResponse(BaseModel):
     """Esquema de respuesta de error."""
     status: str = "error"
     detail: str
+
+
+# ─── Esquemas para validación de préstamos ────────────────────────────────────
+
+class ValidationItem(BaseModel):
+    """Resultado individual de una regla de validación."""
+    code: str = Field(description="Código de la regla (ej. VL-01)")
+    label: str = Field(description="Nombre legible de la validación")
+    passed: bool = Field(description="True = cumple la regla, False = requiere atención")
+    severity: str = Field(description="'error' | 'warning'")
+    detail: Optional[str] = Field(default=None, description="Mensaje explicativo para el oficial")
+
+
+class LoanValidationResponse(AnalyzeResponse):
+    """Respuesta extendida con los resultados de las 13 validaciones de préstamos Cíes y Ons."""
+    validations: list[ValidationItem] = Field(
+        default=[],
+        description="Lista de resultados por cada regla de validación",
+    )
+    total_errors: int = Field(default=0, description="Cantidad de errores críticos")
+    total_warnings: int = Field(default=0, description="Cantidad de avisos/advertencias")
+    loan_compliance: str = Field(
+        default="no_conforme",
+        description="Estado de cumplimiento: 'conforme' | 'observado' | 'no_conforme'",
+    )
+

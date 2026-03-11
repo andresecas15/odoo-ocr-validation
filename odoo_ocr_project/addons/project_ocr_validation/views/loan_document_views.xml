@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ─── Vistas del modelo: project.loan.document ─── -->
+
+    <record id="view_loan_document_form" model="ir.ui.view">
+        <field name="name">project.loan.document.form</field>
+        <field name="model">project.loan.document</field>
+        <field name="arch" type="xml">
+            <form string="Documento de Préstamo">
+                <header>
+                    <button name="action_validate_loan"
+                            string="▶ Validar Documento"
+                            type="object"
+                            class="btn-primary"
+                            attrs="{'invisible': [('state', 'not in', ['draft', 'error'])]}"/>
+                    <button name="action_reset_to_draft"
+                            string="↩ Reiniciar"
+                            type="object"
+                            attrs="{'invisible': [('state', 'in', ['draft'])]}"/>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="draft,processing,done"/>
+                </header>
+                <sheet>
+                    <!-- Alerta de cumplimiento -->
+                    <div class="alert alert-success" role="alert"
+                         attrs="{'invisible': [('loan_compliance', '!=', 'conforme')]}">
+                        <strong>✅ Conforme</strong> — El expediente cumple con todos los requisitos.
+                    </div>
+                    <div class="alert alert-warning" role="alert"
+                         attrs="{'invisible': [('loan_compliance', '!=', 'observado')]}">
+                        <strong>⚠️ Observado</strong> — Hay items que requieren revisión manual antes de procesar.
+                    </div>
+                    <div class="alert alert-danger" role="alert"
+                         attrs="{'invisible': [('loan_compliance', '!=', 'no_conforme')]}">
+                        <strong>❌ No Conforme</strong> — El expediente tiene errores críticos. Debe devolverse para corrección.
+                    </div>
+
+                    <group>
+                        <group string="Información del Documento">
+                            <field name="name" placeholder="Nombre del expediente"/>
+                            <field name="loan_type"/>
+                            <field name="attachment_id"
+                                   domain="[('mimetype', '=', 'application/pdf')]"
+                                   context="{'default_res_model': 'project.loan.document'}"/>
+                        </group>
+                        <group string="Resultado de Cumplimiento"
+                               attrs="{'invisible': [('state', '=', 'draft')]}">
+                            <field name="loan_compliance" readonly="1"/>
+                            <field name="total_errors" readonly="1"/>
+                            <field name="total_warnings" readonly="1"/>
+                        </group>
+                    </group>
+
+                    <!-- Checklist de validaciones -->
+                    <notebook attrs="{'invisible': [('state', 'not in', ['done', 'error'])]}">
+                        <page string="Checklist de Validación (13 reglas)">
+                            <field name="validation_ids" readonly="1" nolabel="1">
+                                <tree decoration-success="passed == True"
+                                      decoration-danger="passed == False and severity == 'error'"
+                                      decoration-warning="passed == False and severity == 'warning'"
+                                      editable="False">
+                                    <field name="status_icon" string=""/>
+                                    <field name="code" string="Código"/>
+                                    <field name="label" string="Validación"/>
+                                    <field name="severity" string="Severidad"/>
+                                    <field name="detail" string="Detalle"/>
+                                    <field name="passed" invisible="1"/>
+                                </tree>
+                            </field>
+                        </page>
+                    </notebook>
+
+                    <!-- Error técnico -->
+                    <group string="Error Técnico"
+                           attrs="{'invisible': [('state', '!=', 'error')]}">
+                        <field name="error_message" readonly="1" nolabel="1"/>
+                    </group>
+                </sheet>
+                <div class="oe_chatter">
+                    <field name="message_follower_ids"/>
+                    <field name="activity_ids"/>
+                    <field name="message_ids"/>
+                </div>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_loan_document_list" model="ir.ui.view">
+        <field name="name">project.loan.document.list</field>
+        <field name="model">project.loan.document</field>
+        <field name="arch" type="xml">
+            <tree decoration-success="loan_compliance == 'conforme'"
+                  decoration-warning="loan_compliance == 'observado'"
+                  decoration-danger="loan_compliance == 'no_conforme'">
+                <field name="name"/>
+                <field name="loan_type"/>
+                <field name="state"/>
+                <field name="loan_compliance"/>
+                <field name="total_errors"/>
+                <field name="total_warnings"/>
+                <field name="create_date"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- ─── Acción de ventana ─── -->
+
+    <record id="action_loan_document" model="ir.actions.act_window">
+        <field name="name">Préstamos Cíes y Ons</field>
+        <field name="res_model">project.loan.document</field>
+        <field name="view_mode">tree,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Sube el primer expediente de préstamo para validarlo.
+            </p>
+        </field>
+    </record>
+
+    <!-- ─── Menú ─── -->
+
+    <menuitem id="menu_loan_validation_root"
+              name="Validación Préstamos"
+              sequence="20"/>
+
+    <menuitem id="menu_loan_document"
+              name="Préstamos Cíes y Ons"
+              parent="menu_loan_validation_root"
+              action="action_loan_document"
+              sequence="10"/>
+
+</odoo>
