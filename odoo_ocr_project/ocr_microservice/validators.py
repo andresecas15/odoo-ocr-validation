@@ -58,12 +58,18 @@ _REF_BANCARIA_RE = re.compile(r'(?i)referencia\s*bancaria')
 _REF_PERSONAL_RE = re.compile(r'(?i)referencia\s*personal')
 
 # VL-05 – Cargo / Posición
-# Excluye resultados con múltiples keywords de encabezado de tabla
-_CARGO_VALUE_RE = re.compile(
-    r'(?i)(?:cargo|posici[oó]n|ocupaci[oó]n)\s*[:\-]?\s*([^\n]{3,60})'
+# La tabla OCR produce: línea 1 = [CARGO O POSICIÓN | SALARIO | TELÉFONO...]
+#                        línea 2 = [Cabo 1Ero | 1200 | 520-6100...]
+# Se salta la línea del label y se toma el primer token de la siguiente.
+_CARGO_LABEL_RE = re.compile(
+    r'(?i)(?:cargo\s+o\s+posici[oó]n|posici[oó]n|ocupaci[oó]n|profesi[oó]n)'
 )
+_CARGO_NEXT_LINE_RE = re.compile(
+    r'(?i)(?:cargo\s+o\s+posici[oó]n|posici[oó]n|ocupaci[oó]n|profesi[oó]n)[^\n]*\n([^\n]{3,80})'
+)
+# Palabras que indican que lo capturado aun es un encabezado
 _CARGO_HEADER_RE = re.compile(
-    r'(?i)(?:salario|tel[eé]fono|ingresos|otros|gobierno|planilla)', 
+    r'(?i)\b(?:salario|tel[eé]fono|ingresos|otros|gobierno|planilla|nombre|cargo|posici)\b',
 )
 
 # VL-06 – Rango salarial
@@ -73,17 +79,26 @@ _SALARY_AMOUNT_RE = re.compile(
 )
 
 # VL-07 – Lugar de nacimiento (Provincia + País)
-# Captura máximo 60 chars después del label para no incluir otros campos
-_NACIMIENTO_RE = re.compile(
-    r'(?i)lugar\s+de\s+nacimiento\s*[:\-]?\s*([A-Za-záéíóúÁÉÍÓÚñÑ ,]{4,60})'
+# Estrategia 1: el label está en la fila de encabezados, el valor en la siguiente.
+#   Regex que salta hasta el \n y toma la siguiente línea.
+_NACIMIENTO_LABEL_RE = re.compile(r'(?i)lugar\s+de\s+nacimiento')
+_NACIMIENTO_NEXT_LINE_RE = re.compile(
+    r'(?i)lugar\s+de\s+nacimiento[^\n]*\n([^\n]{3,80})'
+)
+# Estrategia 2 (respaldo): buscar patrón Provincia Panamá + País directamente
+_PROVINCIA_RE = re.compile(
+    r'(?i)\b(?:Panam[aá]\s+Oeste|Panam[aá]\s+Este|Panam[aá]\s+Centro|'
+    r'Chiqu[ií]|Chiriqu[ií]|Cocl[eé]|Col[oó]n|Dari[eé]n|Herrera|'
+    r'Los\s+Santos|Veraguas|Bocas\s+del\s+Toro|Guna\s+Yala|'
+    r'Ember[aá]|Ng[aä]be|Ngobe|Wargand[ií])\b'
 )
 _PAIS_RE = re.compile(
-    r'(?i)\b(?:Panam[áa]|Venezuela|Colombia|Costa\s*Rica|M[eé]xico|Ecuador|Per[uú]|'
+    r'(?i)\b(?:Panam[aá]|Venezuela|Colombia|Costa\s*Rica|M[eé]xico|Ecuador|Per[uú]|'
     r'Rep[uú]blica\s+Dominicana|Cuba|El\s+Salvador|Honduras|Nicaragua|Guatemala|Bolivia)\b'
 )
 # Si el valor capturado contiene keywords de encabezado → falso positivo
 _NACIMIENTO_HEADER_RE = re.compile(
-    r'(?i)\b(?:fecha|cedula|c[eé]dula|civil|nacionalidad|vto|estado)\b'
+    r'(?i)\b(?:fecha|cedula|c[eé]dula|civil|nacionalidad|vto|estado|nacimiento)\b'
 )
 
 # VL-08 – Efectividades
@@ -203,25 +218,43 @@ def val_referencias(text: str) -> ValidationResult:
 
 
 def val_cargo_posicion(text: str) -> ValidationResult:
-    """VL-05: Posición/cargo presente y con contenido (afecta hoja de datos y Cocotito pág. 1 y 2)."""
-    match = _CARGO_VALUE_RE.search(text)
-    # Falso positivo si el valor inmediato es un encabezado de tabla
-    is_header = (
-        match is not None
-        and bool(_CARGO_HEADER_RE.search(match.group(1)))
-    )
-    passed = bool(match and match.group(1).strip() and not is_header)
-    detail = (
-        f"Cargo detectado: «{match.group(1).strip()[:60]}»"
-        if passed
-        else "No se encontró campo de cargo/posición con valor legible. Verificar coincidencia con carta de trabajo. Afecta hoja de datos y Cocotito pág. 1 y 2."
-    )
+    """VL-05: Posición/cargo presente y con contenido.
+
+    El formulario es una tabla donde la primera fila tiene los labels
+    (CARGO O POSICIÓN | SALARIO | TELÉFONO...) y la segunda tiene los
+    valores (Cabo 1Ero | 1200... ). Se salta la línea del label.
+    """
+    has_label = bool(_CARGO_LABEL_RE.search(text))
+    if not has_label:
+        return ValidationResult(
+            code="VL-05",
+            label="Posición / Cargo",
+            passed=False,
+            severity="error",
+            detail="No se encontró campo de cargo/posición. Afecta hoja de datos y Cocotito pág. 1 y 2.",
+        )
+
+    # Intentar capturar la línea siguiente al label (donde está el valor)
+    next_line_match = _CARGO_NEXT_LINE_RE.search(text)
+    if next_line_match:
+        value = next_line_match.group(1).strip()
+        # Tomar solo el primer token antes de múltiples palabras-header
+        is_still_header = bool(_CARGO_HEADER_RE.search(value))
+        if not is_still_header and len(value) >= 2:
+            return ValidationResult(
+                code="VL-05",
+                label="Posición / Cargo",
+                passed=True,
+                severity="error",
+                detail=f"Cargo detectado: «{value[:60]}». Verificar coincidencia con carta de trabajo.",
+            )
+
     return ValidationResult(
         code="VL-05",
         label="Posición / Cargo",
-        passed=passed,
+        passed=False,
         severity="error",
-        detail=detail,
+        detail="Campo 'Cargo/Posición' encontrado pero el valor no es legible. Verificar en hoja de datos y Cocotito pág. 1 y 2.",
     )
 
 
@@ -247,35 +280,63 @@ def val_rango_salarial(text: str) -> ValidationResult:
 
 
 def val_lugar_nacimiento(text: str) -> ValidationResult:
-    """VL-07: Lugar de nacimiento debe tener Provincia + País (afecta hoja de datos y Cocotito pág. 1)."""
-    match = _NACIMIENTO_RE.search(text)
-    # Verificar si el match capturó un encabezado de tabla en vez del valor real
-    is_header = (
-        match is not None
-        and bool(_NACIMIENTO_HEADER_RE.search(match.group(1)))
-    )
-    if not match or is_header:
+    """VL-07: Lugar de nacimiento debe tener Provincia + País.
+
+    El campo está en una tabla: fila 1 tiene el label, fila 2 el valor.
+    Estrategia 1: capturar la línea siguiente al label.
+    Estrategia 2 (respaldo): buscar patrón Provincia panameña en todo el texto.
+    """
+    has_label = bool(_NACIMIENTO_LABEL_RE.search(text))
+
+    # Estrategia 1: línea siguiente al label
+    value = None
+    next_line_match = _NACIMIENTO_NEXT_LINE_RE.search(text)
+    if next_line_match:
+        candidate = next_line_match.group(1).strip()
+        is_header = bool(_NACIMIENTO_HEADER_RE.search(candidate))
+        if not is_header and len(candidate) >= 3:
+            value = candidate
+
+    # Estrategia 2: buscar patrón Provincia panameña + País en todo el texto
+    provincia_found = _PROVINCIA_RE.search(text)
+    pais_near = None
+    if provincia_found:
+        # Buscar "Panamá" cerca de la provincia (en un rango de 60 chars)
+        start = max(0, provincia_found.start() - 10)
+        end = min(len(text), provincia_found.end() + 50)
+        nearby = text[start:end]
+        if _PAIS_RE.search(nearby):
+            pais_near = provincia_found.group(0)
+
+    if not has_label:
         return ValidationResult(
             code="VL-07",
             label="Lugar de nacimiento (Provincia + País)",
             passed=False,
             severity="error",
-            detail="Campo 'Lugar de nacimiento' ausente, en blanco o ilegible. Debe indicar Provincia + País (ej. 'Panamá, Panamá'). Afecta hoja de datos y solicitud Cocotito pág. 1.",
+            detail="Campo 'Lugar de nacimiento' ausente. Afecta hoja de datos y Cocotito pág. 1.",
         )
-    value = match.group(1).strip()
-    has_country = bool(_PAIS_RE.search(value))
-    has_content = len(value) >= 4
-    passed = has_content and has_country
-    if not has_content:
-        detail = "Campo de nacimiento vacío o demasiado corto."
-    elif not has_country:
+
+    # Evaluar resultado con lo que se pudo capturar
+    has_country_in_value = bool(_PAIS_RE.search(value or ""))
+    has_provincia = pais_near is not None
+    passed = bool((has_country_in_value and value) or has_provincia)
+
+    if passed:
+        lugar = value[:60] if value and has_country_in_value else f"Provincia: {pais_near}, Panamá"
+        detail = f"Lugar de nacimiento detectado: «{lugar}»"
+    elif value:
         detail = (
             f"Valor «{value[:60]}» no incluye el país. "
-            "Debe indicar Provincia + País (ej. 'Panamá, Panamá'). "
+            "Debe indicar Provincia + País (ej. 'Panamá Oeste, Panamá'). "
             "Afecta hoja de datos y Cocotito pág. 1."
         )
     else:
-        detail = f"Lugar de nacimiento detectado: «{value[:60]}»"
+        detail = (
+            "Campo encontrado pero valor ilegible o en blanco. "
+            "Debe indicar Provincia + País (ej. 'Panamá Oeste, Panamá'). "
+            "Afecta hoja de datos y Cocotito pág. 1."
+        )
     return ValidationResult(
         code="VL-07",
         label="Lugar de nacimiento (Provincia + País)",
