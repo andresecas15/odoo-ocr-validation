@@ -158,3 +158,107 @@ El addon de Odoo no requiere actualización.
 ---
 
 *Muchos regex, mucho debug. El sistema ahora entiende mejor cómo PaddleOCR produce el texto de las tablas del formulario CIES.*
+
+---
+
+# Release Notes — v16.0.1.3.0
+
+**Fechas:** 12 al 16 de marzo de 2026
+
+---
+
+**Gran refactorización analítica y estructural del Motor OCR:** Cambio de paradigma en la extracción de texto. Tras múltiples pruebas, PaddleOCR demostró ser ineficiente para el nivel de exactitud requerido, generando falsos positivos continuos, desorganizando los datos tabulares del formulario CIES, y perdiendo el contexto de lectura. Para solucionarlo, migramos la estrategia base a un modelo de IA Local Vision-Language (LLM) — **Ollama (MiniCPM-V)**.
+
+Esto nos otorga control total, privacidad absoluta (los documentos no salen de sus servidores) y una comprensión semántica perfecta de los documentos escaneados.
+
+> ⚠️ **Consideraciones de Hardware (Tiempos de Ejecución)**  
+> Al ejecutar inferencia de IA localmente en el servidor actual (**Mi CPU**), el procesamiento de un expediente de crédito completo de 18 páginas toma **aproximadamente 2 horas**.  
+> **Recomendación:** Para reducir este tiempo a tan solo **unos pocos minutos**, es imperativo dotar al nuevo servidor de hardware gráfico dedicado (**GPU NVIDIA**).
+
+### Especificaciones de Hardware Recomendado (Servidor OCR / IA)
+Para garantizar una inferencia fluida y tiempos de procesamiento óptimos (minutos en lugar de horas), el servidor de producción debe contar con:
+- **Procesador (CPU):** 8 núcleos o más (ej. Intel Core i7/i9, AMD Ryzen 7/9, o equivalentes en servidor Xeon/EPYC).
+- **Memoria RAM:** 32 GB mínimo (64 GB recomendado para manejar múltiples workers sin cuellos de botella).
+- **GPU (Acelerador Gráfico):** Tarjeta NVIDIA con **mínimo 16 GB de VRAM** (ideal 24 GB+).  
+  *Opciones de Consumo:* RTX 3090, RTX 4090.  
+  *Opciones Enterprise u ഹോsting en la Nube:* NVIDIA A10G, L4, A100.
+- **Almacenamiento:** Unidad SSD NVMe de 500 GB o superior. Los modelos de lenguaje pesan varios Gigabytes y requieren altas velocidades de lectura al cargarse en memoria.
+
+### Instalación de Dependencias Previas en el Nuevo Servidor
+Para que los contenedores de Docker (específicamente Ollama) puedan hacer uso de la GPU gráfica, no basta con instalar Docker. Se debe instalar el driver de NVIDIA y el **NVIDIA Container Toolkit** en el host (asumiendo Linux Ubuntu/Debian):
+
+```bash
+# 1. Actualizar repositorios e instalar drivers de la GPU NVIDIA
+sudo apt update
+sudo apt install -y nvidia-driver-535  # (o la versión recomendada para su hardware)
+
+# 2. Configurar el repositorio del NVIDIA Container Toolkit
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+# 3. Instalar el toolkit
+sudo apt update
+sudo apt install -y nvidia-container-toolkit
+
+# 4. Reiniciar Docker para que reconozca el runtime de NVIDIA
+sudo systemctl restart docker
+```
+
+*(Nota: Una vez instalado esto, el archivo `docker-compose.yml` podrá asignar la GPU al contenedor de Ollama y el tiempo bajará drásticamente).*
+
+## Qué se corrigió / mejoró
+
+### 1. Manejo de Timeouts Asíncronos (Gunicorn & Odoo)
+
+Debido al incremento exponencial en el tiempo de procesamiento (2 hrs) en CPU, ocurrieron bloqueos masivos en la arquitectura:
+- **Gunicorn (Motor OCR):** Moría por `[CRITICAL] WORKER TIMEOUT`. Se reescribió la lógica en FastAPI para mover la inferencia de Ollama a un hilo en segundo plano (`threading.Thread`), permitiendo que el worker de Gunicorn quede libre mientras la IA procesa.
+- **Odoo (HTTP Timeout):** El botón de validación dejaba la petición HTTP web colgada, lo que Odoo interrumpía tirando la conexión y revirtiendo la transacción de base de datos a su estado inicial. Se separó la acción en dos: un disparador rápido (`action_start_ocr_validation`) que programa el análisis OCR para ser ejecutado en segundo plano y asíncronamente por las acciones planificadas de Odoo (`ir.cron`). 
+
+**Archivos afectados:** `ocr_microservice/main.py`, `addons/project_ocr_validation/models/loan_document.py`
+
+---
+
+### 2. Actualización de Expresiones Regulares (RegEx) para Markdown de IA
+
+Las expresiones regulares heredadas en `validators.py` estaban calculadas asumiendo texto crudo proveniente de PaddleOCR. Como el LLM entrega resúmenes estructurados y listas viñeteadas (ej. `- TIPO CUENTA: EDUCADOR`), todas las validaciones fallaban internamente. 
+Adaptamos el motor para soportar de forma nativa salidas de la IA en:
+- **VL-01 (Cédula)**
+- **VL-05 (Cargo/Posición)**
+- **VL-06 (Salario)**
+- **VL-07 (Lugar de Nacimiento)**
+- **VL-10 (Planilla)**
+
+**Archivos afectados:** `ocr_microservice/validators.py`
+
+---
+
+### 3. Ingeniería de Prompt (Alucinaciones y Omisiones de Modelo)
+
+Inicialmente la flexibilidad conversacional de Ollama causó que el modelo "resumiera" la información a su criterio, omitiendo por completo los campos de Rango Salarial y Lugar de Nacimiento, y alucinando etiquetas falsas (ej: "MONTÁM"). 
+Se reescribió el *System Prompt* instruyendo al modelo a operar como un motor OCR estricto: forzando la **transcripción literal, palabra por palabra y línea por línea**, prohibiendo la creación de categorías en Markdown u omisiones arbitrarias de datos financieros/personales.
+
+**Archivos afectados:** `ocr_microservice/services.py`
+
+---
+
+### 4. Bucle Iterativo de Rango Salarial (VL-06)
+
+Se identificaron bugs de lógica matemática donde un dígito suelto o fecha engañaban al motor OCR capturándose como "primer salario detectado", y fallando la prueba del monto mínimo `>= 100.00`.
+- Se implementó un bucle `finditer()` que escanea recursivamente toda la página hasta dar con el salario real.
+- Las particiones de formato numérico de 3 dígitos (ej. `150` de `1,500.00`) ahora capturan `int` gigantescos ilimitados que incorporen comas, decimales, y prefijos americanos y panameños ($ o B/.). 
+
+**Archivos afectados:** `ocr_microservice/validators.py`
+
+---
+
+## Para aplicar
+
+Aplica reinicios simultáneos tanto en el bloque de Odoo (por los cambios de CRON) como en la API OCR asíncrona:
+
+```bash
+docker compose restart odoo ocr_engine
+```
+
+*(El reinicio de los contenedores será inmediato, la descarga del modelo de Ollama ya se encuentra en caché global).*

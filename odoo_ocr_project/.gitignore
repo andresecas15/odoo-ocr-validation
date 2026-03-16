@@ -20,3 +20,4 @@ venv.bak/
 
 # Si se suben más modelos grandes (>50MB), agregarlos a mano:
 # ocr_microservice/models_ml/*.pt
+ollama_data/

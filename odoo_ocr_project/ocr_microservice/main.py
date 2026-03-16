@@ -40,7 +40,7 @@ async def health_check():
     """Endpoint de health check para Docker y monitoreo."""
     return {
         "status": "healthy",
-        "ocr_loaded": services.ocr_model is not None,
+        "ocr_loaded": services.ocr_client is not None,
         "yolo_loaded": services.yolo_model is not None,
         "yolo_model_path": YOLO_MODEL_PATH,
     }

@@ -1,49 +1,69 @@
 import base64
 import os
+from io import BytesIO
 from typing import Optional
 
 import numpy as np
 from fastapi import HTTPException
-from paddleocr import PaddleOCR
 from pdf2image import convert_from_bytes
 from ultralytics import YOLO
 
 from config import (
     DATE_REGEX,
+    LLM_API_KEY,
+    LLM_BASE_URL,
+    LLM_MODEL_NAME,
     YOLO_CLASS_MAP,
     YOLO_CONFIDENCE_THRESHOLD,
     YOLO_MODEL_PATH,
     logger,
 )
 
-ocr_model = None
+ocr_client = None
 yolo_model = None
 
 
 def load_models() -> None:
     """Carga los modelos de IA al iniciar la aplicación."""
-    global ocr_model, yolo_model
+    global ocr_client, yolo_model
 
-    logger.info("Cargando PaddleOCR (lang='es', use_angle_cls=True)...")
-    try:
-        ocr_model = PaddleOCR(use_angle_cls=True, lang="es", show_log=False, use_gpu=False)
-        logger.info("PaddleOCR cargado exitosamente.")
-    except Exception as exc:
+    if LLM_API_KEY:
+        try:
+            # Prescindimos de la librería openai ya que tiene conflictos de dependencias con httpx.
+            # Enrutaremos peticiones JSON crudas mediante la librería "requests".
+            ocr_client = "http_client_enabled"
+            logger.info("Cliente HTTP nativo hacia Ollama / LLM configurado exitosamente (%s).", LLM_MODEL_NAME)
+        except Exception as exc:
+            logger.warning("Error al configurar cliente LLM: %s", exc)
+            ocr_client = None
+    else:
         logger.warning(
             "═══════════════════════════════════════════════════════════════\n"
-            "  ⚠️  PaddleOCR NO PUDO INICIALIZARSE\n"
-            "  Error: %s\n"
-            "  → El servicio arrancará SIN extracción de texto/fechas.\n"
-            "  → Revisa la conexión a internet o los modelos en /root/.paddleocr/\n"
+            "  ⚠️  FALTA LA CLAVE DE API DEL LLM (LLM_API_KEY)\n"
+            "  → La extracción de texto (OCR) con %s fallará.\n"
+            "  → Agrega 'LLM_API_KEY' a tu docker-compose.yml o sistema.\n"
             "═══════════════════════════════════════════════════════════════",
-            exc,
+            LLM_MODEL_NAME
         )
-        ocr_model = None
+        ocr_client = None
 
     if os.path.isfile(YOLO_MODEL_PATH):
         logger.info("Cargando modelo YOLO desde '%s'...", YOLO_MODEL_PATH)
         try:
-            yolo_model = YOLO(YOLO_MODEL_PATH)
+            import torch
+            
+            # Temporary patch to torch.load to force weights_only=False for YOLO model
+            original_load = torch.load
+            def patched_load(*args, **kwargs):
+                kwargs['weights_only'] = False
+                return original_load(*args, **kwargs)
+            
+            torch.load = patched_load
+            try:
+                yolo_model = YOLO(YOLO_MODEL_PATH)
+            finally:
+                torch.load = original_load
+                
             logger.info("Modelo YOLO cargado exitosamente.")
         except Exception as exc:
             logger.warning(
@@ -58,7 +78,7 @@ def load_models() -> None:
             "  ⚠️  MODELO YOLO NO ENCONTRADO – detección visual DESHABILITADA\n"
             "  Ruta esperada: %s\n"
             "  → Entrena tu modelo y copia 'best.pt' en la carpeta models_ml/\n"
-            "  → El OCR de texto (PaddleOCR) seguirá operativo.\n"
+            "  → El OCR de texto seguirá operativo.\n"
             "═══════════════════════════════════════════════════════════════",
             YOLO_MODEL_PATH,
         )
@@ -77,7 +97,8 @@ def decode_pdf(file_data_b64: str) -> bytes:
 
 def pdf_to_images(pdf_bytes: bytes) -> list:
     try:
-        images = convert_from_bytes(pdf_bytes, dpi=200, fmt="png")
+        # Menor DPI para aligerar procesamiento local antes de subirse
+        images = convert_from_bytes(pdf_bytes, dpi=120, fmt="jpeg")
         logger.info("PDF convertido a %d página(s).", len(images))
         return images
     except Exception as exc:
@@ -89,9 +110,7 @@ def pdf_to_images(pdf_bytes: bytes) -> list:
 
 def extract_text_statistics(full_text: str) -> tuple[int, int, int, Optional[str]]:
     import re
-    # Contar palabra "fecha" o "fechas"
     fecha_word_count = len(re.findall(r"(?i)\bfechas?\b", full_text))
-    # Contar palabra relacionada a firma (firma, firman, firmado, firmas)
     firma_word_count = len(re.findall(r"(?i)\bfirm\w*", full_text))
     
     matches = DATE_REGEX.findall(full_text)
@@ -112,30 +131,91 @@ def extract_text_statistics(full_text: str) -> tuple[int, int, int, Optional[str
 
 
 def run_ocr(images: list) -> str:
-    if ocr_model is None:
-        logger.error("PaddleOCR no está inicializado.")
+    import time
+    if ocr_client is None:
+        logger.error("Cliente LLM no está inicializado.")
         return ""
 
-    all_text_parts: list[str] = []
-
-    for page_idx, pil_image in enumerate(images):
-        img_array = np.array(pil_image)
-
+    logger.info("Preparando %d páginas para enviar a Ollama de a 1 por vez para ahorrar RAM en CPU...", len(images))
+    
+    extracted_text_parts = []
+    
+    # Procesar página por página para evitar desborde de RAM en LLM Local
+    for i, pil_image in enumerate(images):
+        logger.info("Procesando página %d/%d con modelo Ollama (%s)...", i+1, len(images), LLM_MODEL_NAME)
+        
+        # Convertir a Base64
+        buffered = BytesIO()
+        pil_image.save(buffered, format="JPEG", quality=70)
+        img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Eres un sistema de OCR avanzado y preciso. Tu ÚNICO propósito es extraer todo el texto visible "
+                    "en la imagen de forma LITERAL, línea por línea.\n"
+                    "REGLAS CRÍTICAS:\n"
+                    "1. NO resumas la información.\n"
+                    "2. NO agrupes en categorías o bloques (no uses '**Client Information:**', '**Amount:**', etc.).\n"
+                    "3. NO omitas ningún dato. Nombres, Cédulas, Lugares de Nacimiento, Cargos, y montos de Salario son críticos.\n"
+                    "4. Escribe exactamente lo que ves, de izquierda a derecha y de arriba a abajo."
+                )
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text", 
+                        "text": "Transcribe todo el texto de esta imagen literalmente. No agrupes la información ni estructures en markdown. Extrae cada campo y valor tal cual aparecen, sin saltarte números de cédula, direcciones, lugares de nacimiento o salarios."
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{img_str}"
+                        }
+                    }
+                ]
+            }
+        ]
+        
         try:
-            result = ocr_model.ocr(img_array, cls=True)
-        except Exception as exc:
-            logger.warning("Error en OCR para página %d: %s", page_idx + 1, exc)
-            continue
+            import requests
+            
+            payload = {
+                "model": LLM_MODEL_NAME,
+                "messages": messages,
+                "stream": False,
+                "options": {
+                    "temperature": 0.0,
+                    "num_predict": 2048
+                }
+            }
+            
+            response = requests.post(f"{LLM_BASE_URL}/chat/completions", json=payload, timeout=3600)
+            response.raise_for_status()
+            
+            data = response.json()
+            page_text = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            
+            extracted_text_parts.append(page_text)
+            logger.info("✓ Página %d completada (%d caracteres).", i+1, len(page_text))
+            
+        except Exception as e:
+            logger.error("Error en Ollama para página %d: %s", i+1, e)
+            extracted_text_parts.append(f"[Error leyendo página {i+1}]")
 
-        if result and result[0]:
-            for line in result[0]:
-                if line and len(line) >= 2:
-                    text_content = line[1][0] if isinstance(line[1], (list, tuple)) else str(line[1])
-                    all_text_parts.append(text_content)
+    extracted_text = "\n\n".join(extracted_text_parts)
 
-    full_text = " ".join(all_text_parts)
-    logger.info("OCR completado. Texto total extraído: %d caracteres.", len(full_text))
-    return full_text
+    logger.info("LLM OCR completado exitosamente con Ollama. Texto total: %d caracteres.", len(extracted_text))
+    # Para monitoreo local
+    logger.info("===== DEBUG TEXTO OLLAMA =====")
+    if extracted_text:
+        logger.info(extracted_text[:1000] + "\n...[truncado]")
+    logger.info("==============================")
+    
+    return extracted_text
+
 
 
 def run_yolo(images: list) -> tuple[int, int]:

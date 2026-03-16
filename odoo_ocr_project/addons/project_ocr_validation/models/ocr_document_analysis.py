@@ -95,7 +95,7 @@ class OcrDocumentAnalysis(models.Model):
             OCR_ENGINE_URL,
             json=payload,
             headers={"Content-Type": "application/json"},
-            timeout=120,
+            timeout=3600,
         )
         response.raise_for_status()
         
@@ -111,7 +111,10 @@ class OcrDocumentAnalysis(models.Model):
 
     def _extract_data_dict(self, result: dict) -> dict:
         """Mapea las llaves del JSON a los campos del Modelo."""
-        has_signature = result.get("firma", False)
+        # Use YOLO detection counts along with boolean fallbacks
+        firma_count = result.get("firma_detected_count", 0)
+        has_signature = result.get("firma", False) or firma_count > 0
+        
         has_date = result.get("fecha_encontrada", False)
         
         # Determinar el Nivel de Cumplimiento Técnico (Compliance)

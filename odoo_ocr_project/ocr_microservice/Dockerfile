@@ -34,35 +34,7 @@ COPY *.py .
 # Crear directorio para modelos ML (se monta como volumen en compose)
 RUN mkdir -p /app/models_ml
 
-# Pre-descargar los modelos de PaddleOCR durante el BUILD via wget
-# Se descargan directamente desde el CDN de PaddlePaddle sin ejecutar el runtime
-# (evita el segfault que ocurría al instanciar PaddleOCR() en Docker build)
-# Modelos necesarios con lang='es' (usa det=en, rec=latin, cls=ch):
-RUN mkdir -p \
-      /root/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer \
-      /root/.paddleocr/whl/rec/latin/latin_PP-OCRv3_rec_infer \
-      /root/.paddleocr/whl/cls/ch_ppocr_mobile_v2.0_cls_infer && \
-    # Detection model
-    curl -fsSL --retry 3 --max-time 120 \
-      https://paddleocr.bj.bcebos.com/PP-OCRv3/english/en_PP-OCRv3_det_infer.tar \
-      -o /root/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer/en_PP-OCRv3_det_infer.tar && \
-    tar -xf /root/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer/en_PP-OCRv3_det_infer.tar \
-      -C /root/.paddleocr/whl/det/en/en_PP-OCRv3_det_infer/ && \
-    # Recognition model (latin)
-    curl -fsSL --retry 3 --max-time 120 \
-      https://paddleocr.bj.bcebos.com/PP-OCRv3/multilingual/latin_PP-OCRv3_rec_infer.tar \
-      -o /root/.paddleocr/whl/rec/latin/latin_PP-OCRv3_rec_infer/latin_PP-OCRv3_rec_infer.tar && \
-    tar -xf /root/.paddleocr/whl/rec/latin/latin_PP-OCRv3_rec_infer/latin_PP-OCRv3_rec_infer.tar \
-      -C /root/.paddleocr/whl/rec/latin/latin_PP-OCRv3_rec_infer/ && \
-    # Classifier model
-    curl -fsSL --retry 3 --max-time 120 \
-      https://paddleocr.bj.bcebos.com/dygraph_v2.0/ch/ch_ppocr_mobile_v2.0_cls_infer.tar \
-      -o /root/.paddleocr/whl/cls/ch_ppocr_mobile_v2.0_cls_infer/ch_ppocr_mobile_v2.0_cls_infer.tar && \
-    tar -xf /root/.paddleocr/whl/cls/ch_ppocr_mobile_v2.0_cls_infer/ch_ppocr_mobile_v2.0_cls_infer.tar \
-      -C /root/.paddleocr/whl/cls/ch_ppocr_mobile_v2.0_cls_infer/ && \
-    echo "Modelos PaddleOCR descargados y extraídos correctamente." && \
-    # Limpiar los .tar para reducir tamaño de imagen
-    find /root/.paddleocr -name "*.tar" -delete
+# (Carga de pesos para YOLO opcional se mapea via volumen)
 
 
 # Puerto de exposición
@@ -80,4 +52,4 @@ CMD ["gunicorn", "main:app", \
      "-k", "uvicorn.workers.UvicornWorker", \
      "--bind", "0.0.0.0:8000", \
      "--preload", \
-     "--timeout", "180"]
+     "--timeout", "7200"]

@@ -16,6 +16,8 @@ import math
 import re
 from dataclasses import dataclass
 from typing import Optional
+import unicodedata
+from rapidfuzz import fuzz, process
 
 
 @dataclass
@@ -30,9 +32,10 @@ class ValidationResult:
 
 # ─── Patrones regex ────────────────────────────────────────────────────────────
 
-# VL-01 – Cédula en formato panameño: 8-1234-56789 | PE-12-3456 | N-12-3456
+# VL-01 – Cédula en formato panameño: 8-1234-56789 | PE-12-3456 | N-12-3456 | 2017-450 (Ollama a veces omite 8-)
+# Added \d{1,2}-\d{3,4}-\d{3,6} explicitly for 9-207-450 
 _CEDULA_RE = re.compile(
-    r'\b(?:[A-Z]{1,2}-\d{1,2}-\d{4,6}|\d{1,2}-\d{3,4}-\d{4,6})\b'
+    r'\b(?:[A-Z]{1,2}-\d{1,2}-\d{4,6}|\d{1,2}-\d{3,4}-\d{3,6}|\d{3,4}-\d{3,6})\b'
 )
 
 # VL-02 – Motivo de préstamo
@@ -74,16 +77,18 @@ _REF_PERSONAL_RE = re.compile(r'(?i)referencias?\s*personales?')
 #   Headers: TIPO DE CLIENTE | CARGO O POSICIÓN | SALARIO | TELÉFONO
 #   Valores: Gobierno         | Otros            | 1200.01 | NO TIENE
 #
-# NUEVA ESTRATEGIA: buscar directamente el patrón
-#   TIPO_CLIENTE_KEYWORD <spaces> CARGO_WORDS <spaces> NÚMERO_DE_SALARIO
-# Sin depender de saltos de línea (que PaddleOCR no garantiza en tablas).
-#
-# Los valores conocidos de TIPO DE CLIENTE son los anchos de tabla que
-# aparecen SIEMPRE antes del cargo. Los usamos como punto de partida.
+# ESTRATEGIA OLLAMA: Ollama resume la fila como "- TIPO CLIENTE: GOBIERNO - DOCENTE"
+# o "- CARGO: DOCENTE" o "TIPO CUENTA: EDUCADOR".
+_CARGO_OLLAMA_RE = re.compile(
+    r'(?i)(?:cargo|posici[oó]n|ocupaci[oó]n|profesi[oó]n|tipo\s+cliente|tipo\s+cuenta)[\s:\-]+'
+    r'(?:[a-z]+\s*[\-]\s*)?'
+    r'([A-Za-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1\u00c1\u00c9\u00cd\u00d3\u00da\u00d1\s/]{3,50})'
+)
+
 _CARGO_LABEL_RE = re.compile(
     r'(?i)\b(?:cargo|posici[oó]n|ocupaci[oó]n|profesi[oó]n)\b'
 )
-# Estrategia principal: TIPO_CLIENTE seguido de CARGO (palabras antes del salario)
+# Estrategia PaddleOCR legacy: TIPO_CLIENTE seguido de CARGO (palabras antes del salario)
 _CARGO_FROM_TIPO_CLIENTE_RE = re.compile(
     r'(?i)\b(?:Gobierno|Privado|Independiente|Jubilado|Pensionado|P[uú]blico|Mixto)'
     r'\s+'
@@ -99,23 +104,26 @@ _CARGO_HEADER_KW_RE = re.compile(
 )
 
 # VL-06 – Rango salarial
-# Buscar el monto ÚNICAMENTE en el contexto de la línea/frase del label SALARIO
-# para evitar capturar números de cédula u otros campos.
-_SALARIO_KEYWORD_RE = re.compile(r'(?i)\b(?:salario|sueldo|ingreso)\b')
-# Rango con o sin B/.: captura "1200.01 - 1500.00" o "B/. 850" o "1200.01"
+# Compatibilidad tanto para PaddleOCR como para resúmenes de Ollama ("- $1,671.41 - MONTOS")
+_SALARIO_KEYWORD_RE = re.compile(r'(?i)\b(?:salario|sueldo|ingreso|monto|credito|cr[eé]dito)s?\b')
+# Busca cualquier monto con formato moneda en el texto (ej. $1,671.41 o 1200.00 o B/. 850)
 _SALARY_RANGE_RE = re.compile(
-    r'(?:B/\.?\s*)?'             # prefijo opcional
-    r'(\d{3,}(?:[.,]\d{1,2})?)'  # primer monto
-    r'(?:\s*[-–]\s*(?:B/\.?\s*)?(\d{3,}(?:[.,]\d{1,2})?))?'  # rango opcional
+    r'(?:B/\.?\s*|\$\s*)?'             # prefijo opcional B/. o $
+    r'(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d{1,}(?:[.,]\d{1,2})?)'  # número con o sin coma de miles
+    r'(?:\s*[-–]\s*(?:B/\.?\s*|\$\s*)?(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d{1,}(?:[.,]\d{1,2})?))?'  # rango opcional
 )
-# Ventana de chars para buscar el monto después del keyword SALARIO
-_SALARY_CONTEXT_WINDOW = 80
+# Ventana ampliada para coincidir con la lista de Ollama
+_SALARY_CONTEXT_WINDOW = 120
 
 # VL-07 – Lugar de nacimiento (Provincia + País)
 # NUEVA ESTRATEGIA: la provincia panameña es la fuente de verdad.
 # 1) Buscar la provincia directamente en el texto (sin depender de layout de tabla)
 # 2) Si la encuentra, el lugar de nacimiento está presente → passed=True
 # 3) La siguiente línea al label es solo un PLUS si contiene texto válido.
+_NACIMIENTO_OLLAMA_RE = re.compile(
+    r'(?i)\blugar\s+de\s+nacimiento\s*[:\-]\s*'
+    r'([A-Za-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1\u00c1\u00c9\u00cd\u00d3\u00da\u00d1\s,]{3,60})'
+)
 _NACIMIENTO_LABEL_RE = re.compile(r'(?i)\blugar\s+de\s+nacimiento\b')
 _NACIMIENTO_NEXT_LINE_RE = re.compile(
     r'(?i)\blugar\s+de\s+nacimiento\b[^\n]*\n([^\n]{3,80})'
@@ -144,17 +152,18 @@ _COTIZACION_RE = re.compile(r'(?i)\bcotizaci[oó]n\b')
 # Dos formatos observados en los documentos CIES de Panamá:
 #   1) P0800013010   → P + dígitos (número de planilla/nómina)
 #   2) N.PR08-3722   → N.PR + código (nómina planilla con prefijo)
-# También se acepta el formato 08-3722 (solo números con guín)
-_PLANILLA_FIELD_RE = re.compile(r'(?i)\b(?:planilla|n[oó]mina)\b')
-_PLANILLA_P_NUM_RE = re.compile(r'\bP(\d{7,12})\b')          # P0800013010
+# También se acepta el formato 08-3722 (solo números con guión) o SORTE121 de Ollama
+_PLANILLA_FIELD_RE = re.compile(r'(?i)\b(?:planilla|n[oó]mina|sorte)\b')
+_PLANILLA_P_NUM_RE = re.compile(r'\bP(\d{5,12})\b')          # P0800013010
 _PLANILLA_NPR_RE = re.compile(r'N\.?PR(\d{2,4}[-]\d{2,6})')  # N.PR08-3722
-_PLANILLA_SIMPLE_RE = re.compile(r'\b(\d{2,4}-\d{3,6})\b')   # 08-3722
+_PLANILLA_SIMPLE_RE = re.compile(r'\b(?<=[^A-Z\d-])(\d{2,4}-\d{3,6})\b')   # 08-3722 asegurando que no empiece tras un número o letra para no capturar el medio de la cédula 
+_PLANILLA_OLLAMA_RE = re.compile(r'(?i)\b(?:sorte|planilla|n[oó]mina)[\s:\-/]*(\d{2,6})') # SORTE/121
 
 # VL-11 – Dirección (longitud)
 # Captura máximo 200 chars para evitar leer el documento completo
 # cuando PaddleOCR no inserta saltos de línea
 _DIRECCION_RE = re.compile(
-    r'(?i)(?:direcci[oó]n|domicilio)\s*[:\-]?\s*([^\n\r]{5,200})'
+    r'(?i)(?:direcci[oó]n|domicilio|residenc(?:ia|ial)|ubicaci[oó]n)\s*[:\-]?\s*([^\n\r]{5,200})'
 )
 _ADDRESS_MAX_CHARS = 120
 
@@ -197,6 +206,55 @@ _NOMBRE_EMPRESA_CONYUGUE_RE = re.compile(
 
 # VL-13 – Proximidad huella-firma (distancia máxima en píxeles @ 200 DPI)
 _PROXIMITY_MAX_PX = 600  # ~3 cm
+
+
+# ─── Funciones Auxiliares de NLP ──────────────────────────────────────────────
+
+def normalize_ocr_text(text: str) -> str:
+    """
+    Limpia el texto proveniente de OCR para mejorar la fiabilidad de las validaciones:
+    - Convierte a minúsculas
+    - Remueve acentos (ej. 'MÉXICO' -> 'mexico')
+    - Reduce múltiples espacios y saltos de línea a un solo espacio
+    - Reemplaza errores OCR comunes conocidos
+    """
+    if not text:
+        return ""
+    
+    # 1. A minúsculas y sin acentos
+    text = text.lower()
+    text = ''.join(c for c in unicodedata.normalize('NFD', text) if unicodedata.category(c) != 'Mn')
+    
+    # 2. Correcciones críticas de OCR
+    text = text.replace('0posicion', 'oposicion') \
+               .replace('1ngreso', 'ingreso')
+    
+    # 3. Unificar todos los whitespaces (espacios, tabs, saltos de línea) en un solo espacio
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+def fuzzy_find(text: str, keyword: str, threshold: float = 85.0) -> int:
+    """
+    Busca la palabra o frase 'keyword' dentro del 'text' usando RapidFuzz.
+    Tolera errores tipográficos comunes en OCR (ej. 'estado civi', 'n0mbre empresa').
+    
+    Retorna:
+        - El índice de inicio (start index) donde se encontró la mejor coincidencia
+        - -1 si no se halló nada superior al `threshold`
+    """
+    # Usamos extractOne con un token_set_ratio o partial_ratio
+    # partial_ratio es útil cuando keyword es mucho más pequeña que text
+    match = process.extractOne(
+        keyword,
+        [text[i:i + len(keyword) + 10] for i in range(0, max(1, len(text) - len(keyword)), 5)],
+        scorer=fuzz.partial_ratio
+    )
+    
+    if match and len(match) >= 2 and match[1] >= threshold:
+        # Recuperar índice aproximado original buscando el fragmento
+        idx = text.find(match[0])
+        return idx
+    return -1
 
 
 # ─── Funciones de validación ──────────────────────────────────────────────────
@@ -310,9 +368,22 @@ def val_cargo_posicion(text: str) -> ValidationResult:
     Estrategia de respaldo: línea siguiente al label 'CARGO O POSICIÓN'
     usando \\b para no hacer substring match en 'OPOSICION'.
     """
-    # ── Estrategia 1 (principal): TIPO_CLIENTE → CARGO → SALARIO ────────────────
-    # Se ejecuta ANTES del check de label porque el OCR a veces fusiona
-    # 'CARGO O POSICIÓN' como 'CARGO OPOSICION' y el label no se detecta.
+    # ── Estrategia 0 (Ollama Markdown format) ───────────────────────────────
+    # Ej: "- TIPO CLIENTE: GOBIERNO - CODICANTE / DUCENTE"
+    ollama_match = _CARGO_OLLAMA_RE.search(text)
+    if ollama_match:
+        cargo_ollama = ollama_match.group(1).strip()
+        # Filtro básico anti-numérico
+        if len(cargo_ollama) >= 3 and not re.search(r'\d{3}', cargo_ollama):
+            return ValidationResult(
+                code="VL-05",
+                label="Posición / Cargo",
+                passed=True,
+                severity="error",
+                detail=f"Cargo detectado: «{cargo_ollama[:60].title()}». Verificar coincidencia con carta de trabajo.",
+            )
+
+    # ── Estrategia 1 (PaddleOCR raw): TIPO_CLIENTE → CARGO → SALARIO ────────────────
     tipo_match = _CARGO_FROM_TIPO_CLIENTE_RE.search(text)
     if tipo_match:
         cargo = tipo_match.group(1).strip()
@@ -322,7 +393,7 @@ def val_cargo_posicion(text: str) -> ValidationResult:
                 label="Posición / Cargo",
                 passed=True,
                 severity="error",
-                detail=f"Cargo detectado: «{cargo[:60]}». Verificar coincidencia con carta de trabajo.",
+                detail=f"Cargo detectado: «{cargo[:60].title()}». Verificar coincidencia con carta de trabajo.",
             )
 
     has_label = bool(_CARGO_LABEL_RE.search(text))
@@ -389,25 +460,25 @@ def val_rango_salarial(text: str) -> ValidationResult:
     window_end = min(len(text), window_start + _SALARY_CONTEXT_WINDOW * 5)  # ~5 filas
     window = text[window_start:window_end]
 
-    range_match = _SALARY_RANGE_RE.search(window)
-    if range_match and range_match.group(1):
-        monto1 = range_match.group(1)
-        monto2 = range_match.group(2)
-        # Filtrar: el monto debe ser >= 100 (evitar números de 3 dígitos de cédula como 762)
-        try:
-            val1 = float(monto1.replace(',', ''))
-            val2 = float(monto2.replace(',', '')) if monto2 else val1
-            if val1 >= 100:
-                rango_str = f"{monto1} - {monto2}" if monto2 else monto1
-                return ValidationResult(
-                    code="VL-06",
-                    label="Rango salarial",
-                    passed=True,
-                    severity="error",
-                    detail=f"Monto detectado: {rango_str}. Verificar que coincida con la carta de trabajo.",
-                )
-        except (ValueError, AttributeError):
-            pass
+    for range_match in _SALARY_RANGE_RE.finditer(window):
+        if range_match and range_match.group(1):
+            monto1 = range_match.group(1)
+            monto2 = range_match.group(2)
+            # Filtrar: el monto debe ser >= 100 y no debe ser una fecha o un patrón de ID
+            try:
+                # Eliminar comas de miles para parsear
+                val1 = float(monto1.replace(',', '').replace('$', '').strip())
+                if val1 >= 100.0:
+                    rango_str = f"{monto1} - {monto2}" if monto2 else monto1
+                    return ValidationResult(
+                        code="VL-06",
+                        label="Rango salarial / Monto",
+                        passed=True,
+                        severity="error",
+                        detail=f"Monto detectado: {rango_str}. Verificar que coincida con carta de trabajo o cotización.",
+                    )
+            except (ValueError, AttributeError):
+                continue
 
     return ValidationResult(
         code="VL-06",
@@ -441,10 +512,14 @@ def val_lugar_nacimiento(text: str) -> ValidationResult:
         end = min(len(text), provincia_match.end() + 60)
         pais_near = bool(_PAIS_RE.search(text[start:end]))
 
-    # ── Estrategia 2 (complemento): capturar la línea siguiente al label ──
+    # ── Estrategia 2 (complemento): formato Ollama o siguiente línea ──
     next_line_value = None
+    ollama_m = _NACIMIENTO_OLLAMA_RE.search(text)
     next_line_match = _NACIMIENTO_NEXT_LINE_RE.search(text)
-    if next_line_match:
+    
+    if ollama_m:
+        next_line_value = ollama_m.group(1).strip()
+    elif next_line_match:
         candidate = next_line_match.group(1).strip()
         if not _NACIMIENTO_HEADER_RE.search(candidate) and len(candidate) >= 3:
             next_line_value = candidate
@@ -460,10 +535,14 @@ def val_lugar_nacimiento(text: str) -> ValidationResult:
 
     # Una provincia panameña en el documento es suficiente para PASSED
     if provincia_str:
-        if next_line_value and not _NACIMIENTO_HEADER_RE.search(next_line_value):
+        # Preferir el string de la provincia (ej. "Veraguas, Panamá") que es más limpio 
+        # que el "next_line_value" que podría tener basura como "santiago sexo" de la tabla.
+        lugar = f"{provincia_str}, Panamá" if pais_near else provincia_str
+        
+        # En caso el OCR de verdad no encontró una provincia válida y usamos el next_line
+        if not provincia_str and next_line_value and not _NACIMIENTO_HEADER_RE.search(next_line_value):
             lugar = next_line_value[:60]
-        else:
-            lugar = f"{provincia_str}, Panamá" if pais_near else provincia_str
+            
         return ValidationResult(
             code="VL-07",
             label="Lugar de nacimiento (Provincia + País)",
@@ -562,6 +641,7 @@ def val_numero_planilla(text: str) -> ValidationResult:
     p_match = _PLANILLA_P_NUM_RE.search(text)
     npr_match = _PLANILLA_NPR_RE.search(text)
     simple_match = _PLANILLA_SIMPLE_RE.search(text)
+    ollama_match = _PLANILLA_OLLAMA_RE.search(text)
 
     candidatos = []
     if p_match:
@@ -571,6 +651,8 @@ def val_numero_planilla(text: str) -> ValidationResult:
     if simple_match and not p_match and not npr_match:
         # Solo usar formato simple si no hay otro más específico
         candidatos.append(simple_match.group(1))
+    if ollama_match and not p_match and not npr_match and not simple_match:
+        candidatos.append(ollama_match.group(1))
 
     has_candidates = len(candidatos) > 0
 
@@ -646,29 +728,28 @@ def val_info_conyugue(text: str) -> ValidationResult:
     """VL-12: Si estado civil es casado/unido, la info del cónyuge es obligatoria.
 
     Extrae: nombre del cónyuge, si labora y nombre de la empresa.
-    Usa una ventana de texto a partir del header 'INFORMACIÓN DEL CÓNYUGE'
-    para no depender de saltos de línea (PaddleOCR produce texto corrido).
-
-    IMPORTANTE: El estado civil se busca SOLO en la ventana del label 'ESTADO CIVIL'
-    para evitar detectar 'casado' en otras secciones del PDF (PEP, etc.).
+    Usa una ventana de texto obtenida mediante Fuzzy Matching desde 'informacion del conyuge'
+    o alternativamente desde 'nombre empresa'.
     """
-    # Buscar el label 'ESTADO CIVIL' y evaluar el valor en los 50 chars siguientes
+    # 1. Detectar si el label Estado Civil está mediante Regex clásico, y si falla, usar Fuzzy
     label_m = _ESTADO_CIVIL_LABEL_RE.search(text)
+    idx_ec = label_m.start() if label_m else fuzzy_find(text, "estado civil", threshold=80.0)
+    
     estado_str = "no detectado"
     is_casado = False
-    if label_m:
-        ventana_ec = text[label_m.end(): label_m.end() + 80]
-        print(f"[VL-12 DBG] label en pos={label_m.start()}, ventana={repr(ventana_ec)}", flush=True)
-        val_ec = _ESTADO_CIVIL_VALUE_RE.search(ventana_ec)
+    
+    if idx_ec != -1:
+        ventana_ec = text[idx_ec: idx_ec + 80]
+        # El val_ec ya no necesita (?i) porque el texto entra normalizado por completo,
+        # pero mantenemos el Regex por si text no es 100% normalizado internamente (aunque lo es en run_all_validations).
+        val_ec = re.search(r'(casad[oa]|unid[oa]|solter[oa]|divorciado?|viud[oa]|separad[oa])', ventana_ec, re.IGNORECASE)
         if val_ec:
             estado_str = val_ec.group(1).strip().title()
-            is_casado = bool(re.search(r'(?i)\b(?:casad[oa]|unid[oa])\b', estado_str))
-    else:
-        idx = text.lower().find('estado')
-        print(f"[VL-12 DBG] 'estado civil' NO encontrado. 'estado' en pos={idx}: {repr(text[max(0,idx-5):idx+30]) if idx>=0 else 'N/A'}", flush=True)
-
+            is_casado = bool(re.search(r'\b(?:casad[oa]|unid[oa])\b', estado_str, re.IGNORECASE))
+    
+    # Manejar soltero/no casado
     if not is_casado:
-        es_soltero = bool(re.search(r'(?i)\bsolter[ao]\b', estado_str))
+        es_soltero = bool(re.search(r'\bsolter[ao]\b', estado_str, re.IGNORECASE))
         detail = (
             f"N/A ({estado_str}). Sección de cónyuge no aplica para persona soltera."
             if es_soltero
@@ -682,63 +763,45 @@ def val_info_conyugue(text: str) -> ValidationResult:
             detail=detail,
         )
 
-    has_conyugue = bool(_CONYUGUE_RE.search(text))
-    if not has_conyugue:
+    # Buscar "nombre empresa" (anclaje para la sección cónyuge) vía Fuzzy o Regex
+    has_conyugue = bool(re.search(r'\bc[oó]nyuge\b|esposo|esposa', text, re.IGNORECASE))
+    
+    # Tratamos de conseguir ancla con 'nombre empresa' 
+    idx_empresa = fuzzy_find(text, "nombre empresa", threshold=85.0)
+    
+    if idx_empresa == -1:
+        # OCR destruyó por completo o la sección no existe
         return ValidationResult(
             code="VL-12",
             label="Información de cónyuge",
             passed=False,
             severity="error",
             detail=(
-                "Estado civil casado/unido pero NO se detectó sección de cónyuge. "
+                "Estado civil casado/unido pero NO se detectó sección de cónyuge (Ancla 'Nombre Empresa'). "
                 "Campo obligatorio — debe completarse antes de procesar el préstamo."
             ),
         )
 
-    # La sección cónyuge se detecta por 'NOMBRE EMPRESA' (campo exclusivo de esa sección).
-    # 'cónyuge' solo como verificacion de has_conyugue; la ventana la anclamos en NOMBRE EMPRESA.
-    all_empresa = list(_CONYUGUE_SECTION_RE.finditer(text))  # 'nombre empresa'
-    empresa_anchor = all_empresa[-1] if all_empresa else None  # ÚLTIMA = sección cónyuge
-    if not all_empresa:
-        # Si no hay NOMBRE EMPRESA, la sección no existe en el texto OCR
-        return ValidationResult(
-            code="VL-12",
-            label="Información de cónyuge",
-            passed=False,
-            severity="error",
-            detail=(
-                "Estado civil casado/unido pero NO se detectó sección de cónyuge. "
-                "Campo obligatorio — debe completarse antes de procesar el préstamo."
-            ),
-        )
-
-    win_start = max(0, empresa_anchor.start() - 400)
-    win_end = min(len(text), empresa_anchor.end() + 200)
+    win_start = max(0, idx_empresa - 400)
+    win_end = min(len(text), idx_empresa + 200)
     ventana = text[win_start:win_end]
-
-    print(f"[VL-12 CON DBG] ventana='{ventana[:200]}'", flush=True)
 
     partes = []
 
-    # Nombre del cónyuge
-    nombre_m = _CONYUGUE_NOMBRE_RE.search(ventana)
-    labora_m = _LABORA_BLOCK_RE.search(ventana)
-    empresa_m = _NOMBRE_EMPRESA_CONYUGUE_RE.search(ventana)
-    print(f"[VL-12 CON DBG] nombre_m={nombre_m}, labora_m={labora_m}, empresa_m={empresa_m}", flush=True)
-
+    # Extraer usando regex sobre la ventana acotada (el texto ya está normalizado a minúsculas, así que corregimos regex)
+    nombre_m = re.search(r'\b(?:[1-9n][0-9a-z\-]{3,11})\s+([a-záéíóúñ]{2,}(?:\s+[a-záéíóúñ]{2,}){1,4})\s+\d{7,9}\b', ventana)
+    labora_m = re.search(r'(?:e?labora)[?!]?.{0,300}?\b(si)\b\s+no\s+x|(?:e?labora)[?!]?.{0,300}?x\s+(si)\b\s+no|(?:e?labora)[?!]?.{0,300}?\b(si)\s+x\b', ventana)
+    empresa_m = re.search(r'nombre\s+empresa\s+(?!referencias?|datos|solicitud|direcci[oó]n|tel[eé]fono|parentesco)([a-záéíóúñ]{2,}(?:\s+[a-záéíóúñ]{2,}){0,4})', ventana)
+    
     if nombre_m:
-        nombre = nombre_m.group(1).strip()
+        nombre = nombre_m.group(1).strip().title()
         partes.append(f"Cónyuge: {nombre[:40]}")
 
-    # Si labora
     if labora_m:
-        partes.append(f"Labora: {labora_m.group(1).upper()}")
+        partes.append(f"Labora: SI")
 
-    # Empresa
     if empresa_m:
-        empresa = empresa_m.group(1).strip()
-        # Limpiar tokens de sección que el OCR puede fusionar al final (ej: "REFERENCIASPERSONALES")
-        empresa = re.sub(r'\s*\b(?:REFERENCIAS\S*|DATOS\S*|SOLICITUD\S*)\b.*$', '', empresa, flags=re.IGNORECASE).strip()
+        empresa = empresa_m.group(1).strip().title()
         if len(empresa) >= 3:
             partes.append(f"Empresa: {empresa[:40]}")
 
@@ -746,7 +809,7 @@ def val_info_conyugue(text: str) -> ValidationResult:
         resumen = " | ".join(partes)
         detail = f"{resumen}. Verificar coincidencia con los documentos presentados."
     else:
-        detail = "Sección de cónyuge presente. Verificar nombre, teléfono y datos laborales manualmente."
+        detail = "Sección de cónyuge detectada pero valores ilegibles por OCR. Verificar nombre y datos laborales."
 
     return ValidationResult(
         code="VL-12",
@@ -820,18 +883,21 @@ def run_all_validations(
     pages_firma: list[int] | None = None,
 ) -> list[ValidationResult]:
     """Ejecuta las 13 validaciones en orden y retorna la lista de resultados."""
+    # ── NORMALIZACIÓN PREVIA DE TEXTO (Aplica para todas las validaciones base) ──
+    norm_text = normalize_ocr_text(text)
+    
     return [
-        val_cedula_format(text),
-        val_motivo_prestamo(text),
-        val_numero_seguro_social(text),
-        val_referencias(text),
-        val_cargo_posicion(text),
-        val_rango_salarial(text),
-        val_lugar_nacimiento(text),
-        val_efectividades(text),
-        val_firma_cotizacion(text, firma_detected, pages_firma),
-        val_numero_planilla(text),
-        val_direccion_longitud(text),
-        val_info_conyugue(text),
+        val_cedula_format(norm_text),
+        val_motivo_prestamo(norm_text),
+        val_numero_seguro_social(norm_text),
+        val_referencias(norm_text),
+        val_cargo_posicion(norm_text),
+        val_rango_salarial(norm_text),
+        val_lugar_nacimiento(norm_text),
+        val_efectividades(norm_text),
+        val_firma_cotizacion(norm_text, firma_detected, pages_firma),
+        val_numero_planilla(norm_text),
+        val_direccion_longitud(norm_text),
+        val_info_conyugue(norm_text),
         val_proximidad_huella_firma(boxes_firma, boxes_huella),
     ]

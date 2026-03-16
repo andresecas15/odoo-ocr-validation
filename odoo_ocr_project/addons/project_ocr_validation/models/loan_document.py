@@ -9,6 +9,8 @@ import base64
 import json
 import logging
 import requests
+import threading
+import odoo
 
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError
@@ -165,33 +167,66 @@ class LoanDocument(models.Model):
                 "filename": self.pdf_filename or self.name,
                 "file_data": file_data,
             }
-            _logger.info(
-                "Enviando PDF '%s' (ID: %s) al validador de préstamos: %s",
-                self.name, self.id, LOAN_VALIDATE_URL,
-            )
-            response = requests.post(
-                LOAN_VALIDATE_URL,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=300,  # 5 min: documentos grandes (19+ pgs) demoran más con OCR+YOLO
-            )
-            response.raise_for_status()
-            result = response.json()
-            _logger.info("Respuesta del validador: %s", json.dumps(result, ensure_ascii=False))
-            self._process_validation_result(result)
 
-        except requests.exceptions.ConnectionError:
-            self._handle_error(
-                _("No se pudo conectar con el motor OCR. Verifique que el servicio 'ocr_engine' esté activo.")
+            db_name = self.env.cr.dbname
+            doc_id = self.id
+
+            def run_ocr_background():
+                try:
+                    _logger.info("HILO FONDO: Enviando PDF al validador OCR (durará ~2 horas)...")
+                    response = requests.post(
+                        LOAN_VALIDATE_URL,
+                        json=payload,
+                        headers={"Content-Type": "application/json"},
+                        timeout=14400,
+                    )
+                    response.raise_for_status()
+                    result = response.json()
+                    _logger.info("Respuesta del validador OCR recibida en segundo plano. Guardando en BD...")
+                    
+                    # Recién al recibir la respuesta, abrimos transacción (evita psycopg2.errors.SerializationFailure)
+                    with odoo.registry(db_name).cursor() as cr:
+                        env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                        doc = env["project.loan.document"].browse(doc_id)
+                        doc._process_validation_result(result)
+                        
+                except requests.exceptions.ConnectionError:
+                    _logger.error("Background Thread Error: ConnectionError")
+                    with odoo.registry(db_name).cursor() as cr:
+                        env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                        env["project.loan.document"].browse(doc_id)._handle_error(_("No se pudo conectar con el motor OCR."))
+                except requests.exceptions.Timeout:
+                    _logger.error("Background Thread Error: Timeout")
+                    with odoo.registry(db_name).cursor() as cr:
+                        env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                        env["project.loan.document"].browse(doc_id)._handle_error(_("El motor OCR no respondió a tiempo."))
+                except requests.exceptions.RequestException as exc:
+                    _logger.error("Background Thread Error: RequestException %s", exc)
+                    with odoo.registry(db_name).cursor() as cr:
+                        env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                        env["project.loan.document"].browse(doc_id)._handle_error(_("Error de red con el motor OCR: %s") % str(exc))
+                except (ValueError, KeyError) as exc:
+                    _logger.error("Background Thread Error: JSON Parse %s", exc)
+                    with odoo.registry(db_name).cursor() as cr:
+                        env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                        env["project.loan.document"].browse(doc_id)._handle_error(_("Error en JSON del motor OCR: %s") % str(exc))
+                except Exception as exc:
+                    _logger.error("Background Thread Error: Exception %s", exc)
+                    with odoo.registry(db_name).cursor() as cr:
+                        env = api.Environment(cr, odoo.SUPERUSER_ID, {})
+                        env["project.loan.document"].browse(doc_id)._handle_error(_("Error interno en hilo de OCR: %s") % str(exc))
+
+            # Iniciar el hilo y liberar el request HTTP principal para evitar timeout del navegador
+            thread = threading.Thread(target=run_ocr_background)
+            thread.start()
+
+            self.message_post(
+                body=_("El documento está siendo procesado por IA en segundo plano. Esto demorará aproximadamente 2 horas para un documento de 18 páginas (dependiendo de la CPU). Refresque la pestaña más tarde para ver el resultado de la validación."),
+                message_type="notification",
             )
-        except requests.exceptions.Timeout:
-            self._handle_error(
-                _("El motor OCR no respondió a tiempo. El documento puede ser muy pesado.")
-            )
-        except requests.exceptions.RequestException as exc:
-            self._handle_error(_("Error de comunicación con el motor OCR: %s") % str(exc))
-        except (ValueError, KeyError) as exc:
-            self._handle_error(_("Error al procesar la respuesta del motor OCR: %s") % str(exc))
+
+        except Exception as exc:
+            self._handle_error(_("Error al preparar validación en segundo plano: %s") % str(exc))
 
         return True
 

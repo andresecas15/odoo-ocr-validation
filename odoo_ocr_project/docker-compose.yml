@@ -37,9 +37,24 @@ services:
       - PORT=5432
       - USER=odoo
       - PASSWORD=odoo_secure_pwd_2024
+    command: ["--limit-time-real=3600", "--limit-time-cpu=3600"]
     volumes:
       - ./addons:/mnt/extra-addons
       - odoo_data:/var/lib/odoo
+    networks:
+      - odoo_net
+
+  # ─────────────────────────────────────────────
+  # Ollama Local - LLM para OCR en CPU
+  # ─────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: odoo_ocr_ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_data:/root/.ollama
     networks:
       - odoo_net
 
@@ -52,16 +67,23 @@ services:
       dockerfile: Dockerfile
     container_name: odoo_ocr_engine
     restart: unless-stopped
+    depends_on:
+      - ollama
     ports:
       - "8000:8000"
+    environment:
+      - LLM_API_KEY=ollama
+      - LLM_BASE_URL=http://ollama:11434/v1
+      - LLM_MODEL_NAME=minicpm-v
     volumes:
       - ./ocr_microservice/models_ml:/app/models_ml
-      - paddleocr_cache:/root/.paddleocr    # modelos OCR persistentes entre reinicios
       # Bind mounts de código fuente para hot-reload (evita rebuild en desarrollo)
       - ./ocr_microservice/validators.py:/app/validators.py:ro
       - ./ocr_microservice/services.py:/app/services.py:ro
       - ./ocr_microservice/main.py:/app/main.py:ro
       - ./ocr_microservice/schemas.py:/app/schemas.py:ro
+      - ./ocr_microservice/config.py:/app/config.py:ro
+      - ./ocr_microservice/requirements.txt:/app/requirements.txt:ro
     networks:
       - odoo_net
     healthcheck:
@@ -74,7 +96,6 @@ services:
 volumes:
   odoo_db_data:
   odoo_data:
-  paddleocr_cache:    # cache de modelos PaddleOCR (det + rec + cls)
 
 networks:
   odoo_net:
