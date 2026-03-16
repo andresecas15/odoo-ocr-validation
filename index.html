@@ -52,7 +52,7 @@
         <!-- Header -->
         <div class="bg-blue-950 text-white p-6 rounded-xl shadow-xl text-center">
             <h1 class="text-2xl font-bold">Flujo de Validación Documental — Préstamos Cíes y Ons</h1>
-            <p class="text-blue-300 mt-1 text-sm">Odoo 16 · FastAPI · PaddleOCR · YOLO · 13 Reglas VL</p>
+            <p class="text-blue-300 mt-1 text-sm">Odoo 16 · FastAPI · Ollama (MiniCPM-V) · YOLO · 13 Reglas VL</p>
         </div>
 
         <!-- Diagrama principal -->
@@ -65,25 +65,25 @@ sequenceDiagram
     actor Oficial as Oficial de Crédito
     participant Odoo   as Odoo 16<br/>(LoanDocument)
     participant API    as FastAPI<br/>/validate-loan
-    participant OCR    as PaddleOCR<br/>(texto)
+    participant OCR    as Ollama<br/>(MiniCPM-V)
     participant YOLO   as YOLO<br/>(visual)
     participant Val    as validators.py<br/>(13 reglas VL)
 
     rect rgb(239,246,255)
     Note over Oficial, Odoo: PASO 1 — Carga del expediente
     Oficial->>Odoo: Sube PDF + elige tipo (Cíes / Ons)
-    Oficial->>Odoo: Clic en «Validar Préstamo»
+    Oficial->>Odoo: Clic en «Inicia Validación (Segundo Plano)»
     Odoo->>Odoo: Genera secuencia PRES/XXXX
-    Odoo->>Odoo: state = processing
+    Odoo->>Odoo: Configura Cron Job Asíncrono
     end
 
     rect rgb(255,251,235)
-    Note over Odoo, YOLO: PASO 2 — Análisis en el microservicio
-    Odoo->>API: HTTP POST /api/v1/validate-loan<br/>{pdf: base64, timeout: 300s}
+    Note over Odoo, YOLO: PASO 2 — OCR y YOLO mediante FastAPI (Threads)
+    Odoo->>API: HTTP POST /api/v1/validate-loan<br/>{pdf: base64, timeout: cron}
     API->>API: Convierte PDF → imágenes por página
-    par Texto (PaddleOCR)
-        API->>OCR: Página 1..N → extraer texto
-        OCR-->>API: Texto completo concatenado<br/>(~50 000 chars)
+    par Texto (Ollama LLM)
+        API->>OCR: Página 1..N → Inferencia Verbatim
+        OCR-->>API: Transcripción Literal Completa<br/>(~50 000 chars)
     and Visual (YOLO best.pt)
         API->>YOLO: Página 1..N → detectar firma/huella
         YOLO-->>API: Boxes por clase + página<br/>firma: [p5,p6,p15] | huella: []
@@ -202,8 +202,8 @@ sequenceDiagram
                             <span class="text-2xl">🐳</span>
                             <div>
                                 <p class="font-semibold text-slate-800">ocr_engine (Docker)</p>
-                                <p class="text-slate-500">FastAPI · PaddleOCR · YOLO · 4 workers · Puerto
-                                    8000<br />Timeout límite: 300 s</p>
+                                <p class="text-slate-500">FastAPI · Ollama LLM · YOLO · 4 workers (Hilos
+                                    asíncronos)<br />Puerto 8000 (GPU Acelerada Recomendada)</p>
                             </div>
                         </div>
                         <div class="flex items-start gap-3">
@@ -213,7 +213,8 @@ sequenceDiagram
                                 <p class="text-slate-500">Addon <code
                                         class="bg-slate-100 px-1 rounded">project_ocr_validation</code><br />Modelos:
                                     <code class="bg-slate-100 px-1 rounded">project.loan.document</code> · <code
-                                        class="bg-slate-100 px-1 rounded">project.ocr.document</code></p>
+                                        class="bg-slate-100 px-1 rounded">project.ocr.document</code>
+                                </p>
                             </div>
                         </div>
                         <div class="flex items-start gap-3">
@@ -261,7 +262,7 @@ sequenceDiagram
         </div>
 
         <!-- Footer -->
-        <p class="text-center text-slate-400 text-xs pb-4">Grupo Saleta · v16.0.1.2.0 · 11 de marzo de 2026</p>
+        <p class="text-center text-slate-400 text-xs pb-4">Grupo Saleta · v16.0.1.3.0 · 16 de marzo de 2026</p>
     </div>
 
     <script type="module">

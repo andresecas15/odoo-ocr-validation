@@ -1,7 +1,7 @@
 # project_ocr_validation — Módulo Odoo 16
 
 Módulo de **validación documental automatizada** para expedientes de préstamos Cíes y Ons.  
-Integra un microservicio Python (FastAPI + PaddleOCR + YOLO) con Odoo para analizar PDFs y aplicar 13 reglas de cumplimiento documental.
+Integra un microservicio Python (FastAPI + Ollama LLM + YOLO) con Odoo para analizar PDFs y aplicar 13 reglas de cumplimiento documental.
 
 > **Nota para IT:** Este módulo es autocontenido y funcional tal cual, pero está pensado para que el equipo técnico lo **herede** en su propio addon (`_inherit`) y lo adapte al modelo de negocio (carpeta de crédito, project.task, account.move, etc.) sin modificar este módulo base.
 
@@ -10,15 +10,15 @@ Integra un microservicio Python (FastAPI + PaddleOCR + YOLO) con Odoo para anali
 ## Arquitectura general
 
 ```
-Odoo (addon)                 Microservicio (Docker)
-┌─────────────────────┐      ┌──────────────────────────────┐
-│  LoanDocument       │ HTTP │  FastAPI                     │
-│  (project.loan.     │ ───► │  POST /api/v1/validate-loan  │
-│   document)         │      │                              │
-│                     │ ◄─── │  PaddleOCR  →  texto OCR     │
-│  ValidationLine     │ JSON │  YOLO       →  firma/huella  │
-│  (×13 reglas VL)    │      │  validators.py → 13 reglas   │
-└─────────────────────┘      └──────────────────────────────┘
+Odoo (addon)                           Microservicio (Docker)
+┌──────────────────────────────┐      ┌──────────────────────────────┐
+│  LoanDocument                │      │  FastAPI (Background Thread) │
+│  (project.loan.document)     │ HTTP │  POST /api/v1/validate-loan  │
+│  Llamada vía Cron Asíncrono  │ ───► │                              │
+│                              │      │  Ollama (MiniCPM) →  OCR     │
+│  ValidationLine              │ ◄─── │  YOLO             →  visual  │
+│  (×13 reglas VL)             │ JSON │  validators.py    →  13 VLs  │
+└──────────────────────────────┘      └──────────────────────────────┘
 ```
 
 El addon también incluye `project.ocr.document` — modelo genérico de análisis OCR sin reglas de negocio, pensado para tipos de documento distintos a préstamos.
@@ -81,7 +81,7 @@ Modelo base para análisis OCR sin reglas de negocio específicas.
 | `fecha_value_count` | `Integer` | Valores de fecha encontrados (patrones `dd/mm/yyyy`, etc.). |
 | `firma_word_count` | `Integer` | Ocurrencias de la palabra "firma" en el texto. |
 | `firma_detected_count` | `Integer` | Firmas detectadas por YOLO. |
-| `analysis_details` | `Text` | JSON técnico del microservicio. |
+| `analysis_details` | `Text` | JSON técnico interactivo con la predicción del LLM Ollama. |
 | `validation_summary` | `Char` (computed) | Resumen visual: `✅ Firma \| ❌ Huella \| ✅ Fecha: 11/03/2026`. |
 
 ---
@@ -157,17 +157,16 @@ class MiSolicitudCredito(models.Model):
     ], readonly=True)
 
     def action_validate(self):
-        # Crear un LoanDocument temporal y disparar la validación
+        # Crear un LoanDocument temporal y programar la validación vía Cron Asíncrono
         loan = self.env["project.loan.document"].create({
             "name": self.name,
             "loan_type": "cies",
             "pdf_file": self.pdf_file,
             "pdf_filename": self.pdf_filename,
         })
-        loan.action_validate_loan()
-        # Copiar resultados al registro propio
-        self.loan_compliance = loan.loan_compliance
-        self.validation_ids = loan.validation_ids
+        loan.action_start_ocr_validation()
+        # NOTA: En este nuevo modelo asíncrono, los resultados se volcarán al
+        # registro propio una vez el CRON background en Odoo termine. Mapear después.
 ```
 
 ### Opción C — Solo mostrar resultados en vista existente (heredar vista)
@@ -204,10 +203,10 @@ class MiSolicitudCredito(models.Model):
 | Variable / Constante | Dónde | Valor por defecto | Descripción |
 |---|---|---|---|
 | `LOAN_VALIDATE_URL` | `loan_document.py` | `http://ocr_engine:8000/api/v1/validate-loan` | Endpoint del microservicio para préstamos. |
-| `OCR_ENGINE_URL` | `ocr_document_analysis.py` | `http://ocr_engine:8000/api/v1/analyze-pdf` | Endpoint del microservicio genérico. |
-| Timeout HTTP | `loan_document.py` | `300` segundos | Configurable en `requests.post(timeout=300)`. |
+| `OCR_ENGINE_URL` | `ocr_document_analysis.py` | `http://ocr_engine:8000/api/v1/analyze-pdf` | Endpoint genérico para FastOCR. |
+| Timeout Web | `loan_document.py` | `3` segundos | Tiempo de disparo para encolar la tarea CRON de Validación de Expediente. |
 
-> Para producción fuera de Docker, cambiar las URLs a la IP/hostname real del servidor del microservicio.
+> Para producción fuera de Docker, cambiar las URLs a la IP/hostname real del servidor del microservicio **NVIDIA GPU**.
 
 ---
 
