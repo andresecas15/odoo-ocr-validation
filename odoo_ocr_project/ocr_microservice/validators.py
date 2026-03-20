@@ -42,10 +42,11 @@ _CEDULA_RE = re.compile(
 # Captura el VALOR justo después del label «motivo [de préstamo]»
 # Se limita a 80 chars y exige al menos 3 palabras para evitar capturar
 # encabezados de tabla ("OFICIAL DE CRÉDITO Jeyse...").
-_MOTIVO_KEYWORD_RE = re.compile(r'(?i)\bmotivo\b')
+_MOTIVO_KEYWORD_RE = re.compile(r'(?i)\b(?:motivo|tipo\s+de\s+cr[eé]dito)\b')
 _MOTIVO_VALUE_RE = re.compile(
-    r'(?i)\bmotivo\s*(?:de\s*pr[eé]stamo)?\s*[:\-=]?\s*'
-    r'([A-Za-záéíóúÁÉÍÓÚñÑ][^\n\r]{4,80})'
+    # Captura valor hasta 80 chars, pero frena INMEDIATAMENTE si ve otra Etiqueta (Ej. 'Numero de Seguro:')
+    r'(?i)\b(?:motivo\s*(?:de\s*pr[eé]stamo)?|tipo\s+de\s+cr[eé]dito)\s*[:\-=]?\s*'
+    r'(.{4,80}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑ\s/]+:|$)'
 )
 # Palabras de encabezado que indican falso positivo en VL-02
 _MOTIVO_FALSE_POSITIVE_RE = re.compile(
@@ -59,7 +60,7 @@ _MOTIVO_FALSE_POSITIVE_RE = re.compile(
 _NSS_LABEL_RE = re.compile(
     r'(?i)'
     r'(?:'
-    r'(?:no|nro|n[uú]m)\.?\s*seguro\s+social'  # No./Nro./Núm. Seguro Social
+    r'(?:no|nro|n[uú]m(?:ero)?)\.?\s*(?:de\s+)?seguro\s+social'  # No./Nro./Núm./Numero de Seguro Social
     r'|seg\.?\s*social'                             # SEG.SOCIAL / SEG SOCIAL
     r'|seguro\s+social'                             # Seguro Social (genérico)
     r')'
@@ -69,8 +70,10 @@ _NSS_VALUE_RE = re.compile(
 )
 
 # VL-04 – Referencias
-_REF_BANCARIA_RE = re.compile(r'(?i)referencias?\s*bancarias?')
-_REF_PERSONAL_RE = re.compile(r'(?i)referencias?\s*personales?')
+# Con la nueva plantilla de Ollama, buscará "Referencia Bancaria: [valor]"
+_REF_BANCARIA_RE = re.compile(r'(?i)referencias?\s*bancarias?(?:\s*[:\-]?\s*(?!no\s+encontrado))')
+_REF_PERSONAL_RE = re.compile(r'(?i)referencias?\s*personales?(?:\s*[:\-]?\s*(?!no\s+encontrado))')
+_REF_OLLAMA_MISSING_RE = re.compile(r'(?i)referencia\s+(?:bancaria|personal)\s*[:\-]\s*no\s+encontrado')
 
 # VL-05 – Cargo / Posición
 # La tabla tiene:
@@ -80,9 +83,10 @@ _REF_PERSONAL_RE = re.compile(r'(?i)referencias?\s*personales?')
 # ESTRATEGIA OLLAMA: Ollama resume la fila como "- TIPO CLIENTE: GOBIERNO - DOCENTE"
 # o "- CARGO: DOCENTE" o "TIPO CUENTA: EDUCADOR".
 _CARGO_OLLAMA_RE = re.compile(
-    r'(?i)(?:cargo|posici[oó]n|ocupaci[oó]n|profesi[oó]n|tipo\s+cliente|tipo\s+cuenta)[\s:\-]+'
+    # Captura valor hasta 60 chars, frena si ve otra etiqueta:
+    r'(?i)(?:cargo|posici[oó]n|ocupaci[oó]n|profesi[oó]n|tipo\s+cliente|tipo\s+cuenta)\s*[:\-]+\s*'
     r'(?:[a-z]+\s*[\-]\s*)?'
-    r'([A-Za-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1\u00c1\u00c9\u00cd\u00d3\u00da\u00d1\s/]{3,50})'
+    r'(.{3,60}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)'
 )
 
 _CARGO_LABEL_RE = re.compile(
@@ -104,32 +108,35 @@ _CARGO_HEADER_KW_RE = re.compile(
 )
 
 # VL-06 – Rango salarial
-# Compatibilidad tanto para PaddleOCR como para resúmenes de Ollama ("- $1,671.41 - MONTOS")
-_SALARIO_KEYWORD_RE = re.compile(r'(?i)\b(?:salario|sueldo|ingreso|monto|credito|cr[eé]dito)s?\b')
+_SALARIO_KEYWORD_RE = re.compile(r'(?i)\b(?:rango\s+salarial|salario|sueldo|ingresos?)\b')
+_SALARIO_OLLAMA_RE = re.compile(
+    r'(?i)rango\s+salarial\s+o\s+salario\s*[:\-]\s*'
+    r'(?!no\s+encontrado)(.{2,60}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)'
+)
 # Busca cualquier monto con formato moneda en el texto (ej. $1,671.41 o 1200.00 o B/. 850)
 _SALARY_RANGE_RE = re.compile(
     r'(?:B/\.?\s*|\$\s*)?'             # prefijo opcional B/. o $
-    r'(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d{1,}(?:[.,]\d{1,2})?)'  # número con o sin coma de miles
-    r'(?:\s*[-–]\s*(?:B/\.?\s*|\$\s*)?(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d{1,}(?:[.,]\d{1,2})?))?'  # rango opcional
+    r'(?<![A-Za-z0-9\-])(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d{1,}(?:[.,]\d{1,2})?)'  # número 1
+    r'(?:\s*[-–]\s*(?:B/\.?\s*|\$\s*)?(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d{1,}(?:[.,]\d{1,2})?))?'  # rango opcional
+    r'(?![A-Za-z0-9])'
 )
 # Ventana ampliada para coincidir con la lista de Ollama
 _SALARY_CONTEXT_WINDOW = 120
 
 # VL-07 – Lugar de nacimiento (Provincia + País)
-# NUEVA ESTRATEGIA: la provincia panameña es la fuente de verdad.
-# 1) Buscar la provincia directamente en el texto (sin depender de layout de tabla)
-# 2) Si la encuentra, el lugar de nacimiento está presente → passed=True
-# 3) La siguiente línea al label es solo un PLUS si contiene texto válido.
+# NUEVA ESTRATEGIA MÚLTIPLE: 
+# 1) Leer directamente el Key-Value de la plantilla de Ollama: 'Lugar de Nacimiento: Veraguas'
+# 2) Buscar la provincia directamente en el texto
 _NACIMIENTO_OLLAMA_RE = re.compile(
     r'(?i)\blugar\s+de\s+nacimiento\s*[:\-]\s*'
-    r'([A-Za-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00f1\u00c1\u00c9\u00cd\u00d3\u00da\u00d1\s,]{3,60})'
+    r'(?!no\s+encontrado)(.{3,60}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)'
 )
 _NACIMIENTO_LABEL_RE = re.compile(r'(?i)\blugar\s+de\s+nacimiento\b')
 _NACIMIENTO_NEXT_LINE_RE = re.compile(
     r'(?i)\blugar\s+de\s+nacimiento\b[^\n]*\n([^\n]{3,80})'
 )
 _PROVINCIA_RE = re.compile(
-    r'(?i)\b(?:Panam[aá]\s+Oeste|Panam[aá]\s+Este|Panam[aá]\s+Centro|'
+    r'(?i)\b(?:Panam[aá]\s+Oeste|Panam[aá]\s+Este|Panam[aá]\s+Centro|Panam[aá]|'
     r'Chiriqu[ií]|Chiqu[ií]|Cocl[eé]|Col[oó]n|Dari[eé]n|Herrera|'
     r'Los\s+Santos|Veraguas|Bocas\s+del\s+Toro|Guna\s+Yala|'
     r'Ember[aá]|Ng[aä]be|Ngobe|Wargand[ií])\b'
@@ -163,7 +170,7 @@ _PLANILLA_OLLAMA_RE = re.compile(r'(?i)\b(?:sorte|planilla|n[oó]mina)[\s:\-/]*(
 # Captura máximo 200 chars para evitar leer el documento completo
 # cuando PaddleOCR no inserta saltos de línea
 _DIRECCION_RE = re.compile(
-    r'(?i)(?:direcci[oó]n|domicilio|residenc(?:ia|ial)|ubicaci[oó]n)\s*[:\-]?\s*([^\n\r]{5,200})'
+    r'(?i)(?:direcci[oó]n(?:\s+residencial)?|datos\s+residenciales|domicilio|residenc(?:ia|ial)|ubicaci[oó]n)\s*[:\-]?\s*([^\n\r]{5,200})'
 )
 _ADDRESS_MAX_CHARS = 120
 
@@ -172,6 +179,7 @@ _ADDRESS_MAX_CHARS = 120
 # Buscar el LABEL 'estado civil' y evaluar el valor en una ventana de 80 chars.
 # OJO: el OCR a veces trunca 'CIVIL' como 'CIVI' → la L es opcional.
 _ESTADO_CIVIL_LABEL_RE = re.compile(r'(?i)\bestado\s+civil?\b')
+_ESTADO_CIVIL_OLLAMA_RE = re.compile(r'(?i)Estado Civil:\s*([A-Za-z0-9ÁÉÍÓÚÑáéíóúñ\.\,\-( )]+)')
 _ESTADO_CIVIL_VALUE_RE = re.compile(r'(?i)(casad[oa]|unid[oa]|solter[oa]|divorciado?|viud[oa]|separad[oa])')
 _CONYUGUE_RE = re.compile(
     r'(?i)\bc[oó]nyuge\b|esposo|esposa'
@@ -250,9 +258,9 @@ def fuzzy_find(text: str, keyword: str, threshold: float = 85.0) -> int:
         scorer=fuzz.partial_ratio
     )
     
-    if match and len(match) >= 2 and match[1] >= threshold:
+    if match and len(match) >= 2 and isinstance(match[1], (int, float)) and match[1] >= threshold:
         # Recuperar índice aproximado original buscando el fragmento
-        idx = text.find(match[0])
+        idx = text.find(str(match[0]))
         return idx
     return -1
 
@@ -278,21 +286,37 @@ def val_cedula_format(text: str) -> ValidationResult:
 
 
 def val_motivo_prestamo(text: str) -> ValidationResult:
-    """VL-02: Hoja de datos contiene motivo de préstamo con contenido."""
+    """VL-02: Hoja de datos contiene motivo de préstamo con contenido.
+    Asegura que ignora reportes de 'NO ENCONTRADO' devueltos por páginas
+    irrelevantes de Ollama, y usa la primera coincidencia válida.
+    """
     keyword = bool(_MOTIVO_KEYWORD_RE.search(text))
-    value_match = _MOTIVO_VALUE_RE.search(text)
-    # Verificar falso positivo: el match capturó un encabezado de tabla
-    is_false_positive = (
-        value_match is not None
-        and bool(_MOTIVO_FALSE_POSITIVE_RE.search(value_match.group(1)))
-    )
-    passed = bool(value_match and value_match.group(1).strip() and not is_false_positive)
+    
+    val_str = None
+    is_false_positive = False
+
+    for match_ in _MOTIVO_VALUE_RE.finditer(text):
+        candidate = match_.group(1).strip()
+        if candidate.upper() == "NO ENCONTRADO":
+            continue
+        
+        # Verificar falso positivo: el match capturó un encabezado de tabla
+        if bool(_MOTIVO_FALSE_POSITIVE_RE.search(candidate)):
+            is_false_positive = True
+            continue
+            
+        val_str = candidate
+        break
+
+    passed = keyword and (val_str is not None)
+
     if not keyword:
-        detail = "Campo 'Motivo de préstamo' ausente en el documento."
-    elif not value_match or is_false_positive:
+        detail = "No se encontró etiqueta de motivo (ej. 'PROPÓSITO DEL PRÉSTAMO')."
+    elif val_str is None:
         detail = "Campo 'Motivo' encontrado pero el valor parece estar en blanco o no es legible."
     else:
-        detail = f"Motivo detectado: «{value_match.group(1).strip()[:80]}»"
+        detail = f"Motivo detectado: «{val_str[:80]}»"
+        
     return ValidationResult(
         code="VL-02",
         label="Motivo de préstamo",
@@ -334,68 +358,71 @@ def val_numero_seguro_social(text: str) -> ValidationResult:
 
 
 def val_referencias(text: str) -> ValidationResult:
-    """VL-04: Referencias bancarias Y personales presentes (afecta hoja de datos y solicitud Cocotito)."""
-    has_banco = bool(_REF_BANCARIA_RE.search(text))
-    has_personal = bool(_REF_PERSONAL_RE.search(text))
-    passed = has_banco and has_personal
+    """VL-04: Referencias bancarias y personales.
+    Busca explícitamente la confirmación de Referencia Bancaria y Personal
+    usando la estructura de Ollama y el lookahead.
+    """
+    bancaria_ok = False
+    for match in re.finditer(r'(?i)referencias?\s*bancarias?\s*[:\-]\s*(.{1,60}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)', text):
+        val = match.group(1).strip().lower()
+        if val not in ("no encontrado", "?") and "no se menciona" not in val:
+            bancaria_ok = True
+            break
+            
+    personal_ok = False
+    for match in re.finditer(r'(?i)referencias?\s*personales?\s*[:\-]\s*(.{1,60}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)', text):
+        val = match.group(1).strip().lower()
+        if val not in ("no encontrado", "?") and "no se menciona" not in val:
+            personal_ok = True
+            break
+            
+    # Si Ollama no extrajo nada con el formato estructurado, 
+    # comprobamos de forma legacy buscando la frase en cualquier lado.
+    if not bancaria_ok and not personal_ok:
+        bancaria_ok = bool(re.search(r'(?i)referencias?\s*bancarias?\b', text))
+        personal_ok = bool(re.search(r'(?i)referencias?\s*personales?\b', text))
+
     faltantes = []
-    if not has_banco:
-        faltantes.append("referencia bancaria")
-    if not has_personal:
-        faltantes.append("referencia personal")
-    detail = (
-        "Ambas referencias presentes (bancaria y personal)."
-        if passed
-        else f"Faltan: {', '.join(faltantes)}. Afecta hoja de datos y solicitud de cuenta ahorro Cocotito (pág. 1 y 2)."
-    )
+    if not bancaria_ok: faltantes.append("referencia bancaria")
+    if not personal_ok: faltantes.append("referencia personal")
+
+    if faltantes:
+        return ValidationResult(
+            code="VL-04",
+            label="Referencias bancarias y personales",
+            passed=False,
+            severity="error",
+            detail=f"Faltan: {', '.join(faltantes)}. Afecta hoja de datos y solicitud de cuenta ahorro Cocotito pág. 2.",
+        )
     return ValidationResult(
         code="VL-04",
         label="Referencias bancarias y personales",
-        passed=passed,
+        passed=True,
         severity="error",
-        detail=detail,
+        detail="Ambas referencias presentes (bancaria y personal).",
     )
 
 
 def val_cargo_posicion(text: str) -> ValidationResult:
     """VL-05: Posición/cargo presente y con contenido.
-
-    Estrategia principal: buscar el patrón
-      TIPO_CLIENTE (Gobierno|Privado...) + CARGO_WORDS + NÚMERO_SALARIO
-    directamente en el texto concatenado de PaddleOCR, sin depender de
-    saltos de línea de tabla que son poco fiables.
-
-    Estrategia de respaldo: línea siguiente al label 'CARGO O POSICIÓN'
-    usando \\b para no hacer substring match en 'OPOSICION'.
+    Estrategia principal: Buscar la respuesta de Ollama en el template.
+    Si dice NO ENCONTRADO en todas las páginas, fallback al texto en bruto.
     """
-    # ── Estrategia 0 (Ollama Markdown format) ───────────────────────────────
-    # Ej: "- TIPO CLIENTE: GOBIERNO - CODICANTE / DUCENTE"
-    ollama_match = _CARGO_OLLAMA_RE.search(text)
-    if ollama_match:
-        cargo_ollama = ollama_match.group(1).strip()
-        # Filtro básico anti-numérico
-        if len(cargo_ollama) >= 3 and not re.search(r'\d{3}', cargo_ollama):
-            return ValidationResult(
-                code="VL-05",
-                label="Posición / Cargo",
-                passed=True,
-                severity="error",
-                detail=f"Cargo detectado: «{cargo_ollama[:60].title()}». Verificar coincidencia con carta de trabajo.",
-            )
+    # ── Estrategia 0 (Ollama Markdown format) ──
+    for match_ in _CARGO_OLLAMA_RE.finditer(text):
+        cargo_ollama = match_.group(1).strip()
+        if cargo_ollama.upper() not in ("NO ENCONTRADO", "NO", "NO RANGO", "RANGO", "NO APLICA", "NO REGISTRA", "NO TIENE", "?", "N/A"):
+            # Filtro básico anti-numérico (no solo números)
+            if len(cargo_ollama) >= 3 and not re.fullmatch(r'\d+', cargo_ollama.replace(' ', '')):
+                return ValidationResult(
+                    code="VL-05",
+                    label="Posición / Cargo",
+                    passed=True,
+                    severity="error",
+                    detail=f"Cargo detectado por LLM: «{cargo_ollama[:60].title()}». Verificar contra carta de trabajo.",
+                )
 
-    # ── Estrategia 1 (PaddleOCR raw): TIPO_CLIENTE → CARGO → SALARIO ────────────────
-    tipo_match = _CARGO_FROM_TIPO_CLIENTE_RE.search(text)
-    if tipo_match:
-        cargo = tipo_match.group(1).strip()
-        if cargo and len(cargo) >= 2 and not _CARGO_HEADER_KW_RE.search(cargo):
-            return ValidationResult(
-                code="VL-05",
-                label="Posición / Cargo",
-                passed=True,
-                severity="error",
-                detail=f"Cargo detectado: «{cargo[:60].title()}». Verificar coincidencia con carta de trabajo.",
-            )
-
+    # ── Estrategia 1 (Fallback en texto bruto) ──
     has_label = bool(_CARGO_LABEL_RE.search(text))
     if not has_label:
         return ValidationResult(
@@ -406,44 +433,118 @@ def val_cargo_posicion(text: str) -> ValidationResult:
             detail="No se encontró campo de cargo/posición. Afecta hoja de datos y Cocotito pág. 1 y 2.",
         )
 
-    # ── Estrategia 2: siguiente línea al label con \b correcto ─────────────
+    # Como la etiqueta existe en alguna parte del texto adicional, probar buscarla
     next_line_match = _CARGO_NEXT_LINE_RE.search(text)
     if next_line_match:
-        raw_value = next_line_match.group(1).strip()
-        # Quitar TIPO DE CLIENTE al inicio si lo hay
-        tipo_prefix = re.match(
-            r'(?i)^(?:Gobierno|Privado|Independiente|Jubilado|Pensionado|P[uú]blico|Mixto)\s+',
-            raw_value
-        )
-        value = raw_value[tipo_prefix.end():].strip() if tipo_prefix else raw_value
-        # Cortar antes del primer monto de salario
-        m = re.search(r'\s+\d{3,}[\s,.]', value)
-        if m:
-            value = value[:m.start()].strip()
-        if not _CARGO_HEADER_KW_RE.search(value) and len(value) >= 2:
-            return ValidationResult(
-                code="VL-05",
-                label="Posición / Cargo",
-                passed=True,
-                severity="error",
-                detail=f"Cargo detectado: «{value[:60]}». Verificar coincidencia con carta de trabajo.",
-            )
+        # Aquí next_line_match capturaba "O Posicion" si el label match fue "Cargo"
+        # Usamos una expresión más específica para el raw text
+        raw_val_match = re.search(r'(?i)(?:cargo|posici[oó]n|profesi[oó]n|oficio)\s*[:\-]?\s*([a-z\s/()]{3,40})', text)
+        if raw_val_match:
+            candidate = raw_val_match.group(1).strip()
+            if candidate.upper() not in ["O POSICION", "NO ENCONTRADO"] and len(candidate) >= 3:
+                return ValidationResult(
+                    code="VL-05",
+                    label="Posición / Cargo",
+                    passed=True,
+                    severity="error",
+                    detail=f"Cargo detectado en texto: «{candidate[:60].title()}». Verificar coincidencia con carta de trabajo.",
+                )
 
     return ValidationResult(
         code="VL-05",
         label="Posición / Cargo",
         passed=False,
         severity="error",
-        detail="Campo 'Cargo/Posición' encontrado pero valor no legible. Verificar en hoja de datos y Cocotito pág. 1 y 2.",
+        detail="Campo encontrado en documento, pero el valor parece estar en blanco o es ilegible.",
     )
 
 
 def val_rango_salarial(text: str) -> ValidationResult:
     """VL-06: Rango salarial presente con valor numérico >= 100.
 
-    Busca el monto únicamente en la ventana de texto que rodea la
-    palabra clave SALARIO, evitando capturar números de cédula u otros.
+    Estrategia DOS PASADAS:
+    1) Buscar un RANGO explícito (X - Y) primero en la plantilla de Ollama y
+       luego en cualquier ventana del texto.  Un rango siempre es preferido a
+       un monto suelto porque es la forma correcta que debe aparecer en el doc.
+    2) Solo si no hay ningún rango, aceptar un monto simple >= 100.
+    Esto evita que un número hallucinated ("1992") oculte el rango real
+    ("1200.01 - 1500.00") que normalmente aparece en otra página.
     """
+
+    # ── Regex para detectar específicamente un rango (dos números con guión) ──
+    _RANGE_EXPLICIT_RE = re.compile(
+        r'(?:B/\.?\s*|\$\s*)?'
+        r'(?<![A-Za-z0-9\-])(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d{1,}(?:[.,]\d{1,2})?)'
+        r'\s*[-–]\s*'
+        r'(?:B/\.?\s*|\$\s*)?(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d{1,}(?:[.,]\d{1,2})?)'
+        r'(?![A-Za-z0-9])'
+    )
+
+    def _to_float(s: str) -> float:
+        return float(s.replace(',', '').replace('$', '').replace('B/.', '').strip())
+
+    # ── Recopilar candidatos de Ollama ──
+    ollama_ranges: list[tuple[str, str]] = []
+    ollama_singles: list[str] = []
+    for ollama_m in _SALARIO_OLLAMA_RE.finditer(text):
+        val_str = ollama_m.group(1).strip()
+        if val_str.upper() in ("NO ENCONTRADO", "?", ""):
+            continue
+        # ¿Tiene rango explícito?
+        for rm in _RANGE_EXPLICIT_RE.finditer(val_str):
+            try:
+                v1 = _to_float(rm.group(1))
+                v2 = _to_float(rm.group(2))
+                if v1 >= 100.0 and v2 >= 100.0:
+                    ollama_ranges.append((rm.group(1), rm.group(2)))
+            except (ValueError, AttributeError):
+                pass
+        if not ollama_ranges:
+            # Guardar montos simples como fallback de Ollama
+            for sm in _SALARY_RANGE_RE.finditer(val_str):
+                if sm.group(1) and not sm.group(2):
+                    try:
+                        if _to_float(sm.group(1)) >= 100.0:
+                            ollama_singles.append(sm.group(1))
+                    except (ValueError, AttributeError):
+                        pass
+
+    # ── Buscar rangos en TODO el texto (incluye páginas que Ollama no capturó) ──
+    text_ranges: list[tuple[str, str]] = []
+    for kw_m in _SALARIO_KEYWORD_RE.finditer(text):
+        window = text[kw_m.start(): min(len(text), kw_m.start() + _SALARY_CONTEXT_WINDOW * 5)]
+        for rm in _RANGE_EXPLICIT_RE.finditer(window):
+            try:
+                v1 = _to_float(rm.group(1))
+                v2 = _to_float(rm.group(2))
+                if v1 >= 100.0 and v2 >= 100.0:
+                    text_ranges.append((rm.group(1), rm.group(2)))
+            except (ValueError, AttributeError):
+                pass
+
+    # ── Decidir el mejor candidato ──
+    # Prioridad: rango Ollama > rango texto > single Ollama > single texto
+    best_range = (ollama_ranges or text_ranges or [None])[0]
+    if best_range and best_range is not None: # Added explicit check for None
+        rango_str = f"{best_range[0]} - {best_range[1]}"
+        return ValidationResult(
+            code="VL-06",
+            label="Rango salarial / Monto",
+            passed=True,
+            severity="error",
+            detail=f"Monto detectado: {rango_str}. Verificar que coincida con carta de trabajo o cotización.",
+        )
+
+    if ollama_singles:
+        return ValidationResult(
+            code="VL-06",
+            label="Rango salarial / Monto",
+            passed=True,
+            severity="error",
+            detail=f"Monto detectado: {ollama_singles[0]}. Verificar que coincida con carta de trabajo o cotización.",
+        )
+
+    # ── Single en texto ──
     has_keyword = bool(_SALARIO_KEYWORD_RE.search(text))
     if not has_keyword:
         return ValidationResult(
@@ -453,32 +554,22 @@ def val_rango_salarial(text: str) -> ValidationResult:
             severity="error",
             detail="No se encontró campo de salario/sueldo. Verificar coincidencia con carta de trabajo.",
         )
-
-    # Buscar el monto en la ventana posterior al keyword SALARIO
-    salary_kw = _SALARIO_KEYWORD_RE.search(text)
-    window_start = salary_kw.start()
-    window_end = min(len(text), window_start + _SALARY_CONTEXT_WINDOW * 5)  # ~5 filas
-    window = text[window_start:window_end]
-
-    for range_match in _SALARY_RANGE_RE.finditer(window):
-        if range_match and range_match.group(1):
-            monto1 = range_match.group(1)
-            monto2 = range_match.group(2)
-            # Filtrar: el monto debe ser >= 100 y no debe ser una fecha o un patrón de ID
-            try:
-                # Eliminar comas de miles para parsear
-                val1 = float(monto1.replace(',', '').replace('$', '').strip())
-                if val1 >= 100.0:
-                    rango_str = f"{monto1} - {monto2}" if monto2 else monto1
-                    return ValidationResult(
-                        code="VL-06",
-                        label="Rango salarial / Monto",
-                        passed=True,
-                        severity="error",
-                        detail=f"Monto detectado: {rango_str}. Verificar que coincida con carta de trabajo o cotización.",
-                    )
-            except (ValueError, AttributeError):
-                continue
+    for kw_m in _SALARIO_KEYWORD_RE.finditer(text):
+        window = text[kw_m.start(): min(len(text), kw_m.start() + _SALARY_CONTEXT_WINDOW * 5)]
+        for sm in _SALARY_RANGE_RE.finditer(window):
+            if sm.group(1):
+                try:
+                    if _to_float(sm.group(1)) >= 100.0:
+                        rango_str = f"{sm.group(1)} - {sm.group(2)}" if sm.group(2) else sm.group(1)
+                        return ValidationResult(
+                            code="VL-06",
+                            label="Rango salarial / Monto",
+                            passed=True,
+                            severity="error",
+                            detail=f"Monto detectado: {rango_str}. Verificar que coincida con carta de trabajo o cotización.",
+                        )
+                except (ValueError, AttributeError):
+                    continue
 
     return ValidationResult(
         code="VL-06",
@@ -492,39 +583,31 @@ def val_rango_salarial(text: str) -> ValidationResult:
 def val_lugar_nacimiento(text: str) -> ValidationResult:
     """VL-07: Lugar de nacimiento debe contener una Provincia panameña.
 
-    NUEVA ESTRATEGIA:
-    - Estrategia 1 (principal): buscar una Provincia panameña directamente
-      en el texto completo. Si la encuentra, el lugar está presente.
-    - Estrategia 2 (complemento): línea siguiente al label '\\blugar de nacimiento'
-      (con \\b para evitar substring match). Si el campo no contiene keywords
-      de encabezado, se muestra como detalle adicional.
+    Estrategias:
+    1) Leer el Key-Value de Ollama y buscar una provincia panameña ahí, iterando
+       sobre todas las páginas por si alguna responde NO ENCONTRADO.
+    2) Si Ollama falló en todas las páginas, buscar la etiqueta 'Lugar de Nacimiento'
+       en el texto OCR y buscar una provincia en una ventana de 150 caracteres.
     """
-    has_label = bool(_NACIMIENTO_LABEL_RE.search(text))
+    # Evaluar respuesta de Ollama iterando
+    for ollama_m in _NACIMIENTO_OLLAMA_RE.finditer(text):
+        val_str = ollama_m.group(1).strip()
+        if val_str.upper() != "NO ENCONTRADO":
+            prov_match = _PROVINCIA_RE.search(val_str)
+            pais_match = _PAIS_RE.search(val_str)
+            if prov_match:
+                lugar = f"{prov_match.group(0).strip()}, {pais_match.group(0).strip() if pais_match else 'Panamá'}"
+                return ValidationResult(
+                    code="VL-07",
+                    label="Lugar de nacimiento (Provincia + País)",
+                    passed=True,
+                    severity="error",
+                    detail=f"Lugar de nacimiento detectado por LLM: «{lugar}»",
+                )
 
-    # ── Estrategia 1 (principal): buscar provincia panameña en todo el doc ──
-    provincia_match = _PROVINCIA_RE.search(text)
-    provincia_str = provincia_match.group(0).strip() if provincia_match else None
-
-    # Verificar si cerca de la provincia aparece el país
-    pais_near = False
-    if provincia_match:
-        start = max(0, provincia_match.start() - 20)
-        end = min(len(text), provincia_match.end() + 60)
-        pais_near = bool(_PAIS_RE.search(text[start:end]))
-
-    # ── Estrategia 2 (complemento): formato Ollama o siguiente línea ──
-    next_line_value = None
-    ollama_m = _NACIMIENTO_OLLAMA_RE.search(text)
-    next_line_match = _NACIMIENTO_NEXT_LINE_RE.search(text)
-    
-    if ollama_m:
-        next_line_value = ollama_m.group(1).strip()
-    elif next_line_match:
-        candidate = next_line_match.group(1).strip()
-        if not _NACIMIENTO_HEADER_RE.search(candidate) and len(candidate) >= 3:
-            next_line_value = candidate
-
-    if not has_label:
+    # Fallback al texto local si Ollama ignoró el campo en todas las páginas
+    label_match = _NACIMIENTO_LABEL_RE.search(text)
+    if not label_match:
         return ValidationResult(
             code="VL-07",
             label="Lugar de nacimiento (Provincia + País)",
@@ -533,36 +616,21 @@ def val_lugar_nacimiento(text: str) -> ValidationResult:
             detail="Campo 'Lugar de nacimiento' ausente. Afecta hoja de datos y Cocotito pág. 1.",
         )
 
-    # Una provincia panameña en el documento es suficiente para PASSED
-    if provincia_str:
-        # Preferir el string de la provincia (ej. "Veraguas, Panamá") que es más limpio 
-        # que el "next_line_value" que podría tener basura como "santiago sexo" de la tabla.
-        lugar = f"{provincia_str}, Panamá" if pais_near else provincia_str
-        
-        # En caso el OCR de verdad no encontró una provincia válida y usamos el next_line
-        if not provincia_str and next_line_value and not _NACIMIENTO_HEADER_RE.search(next_line_value):
-            lugar = next_line_value[:60]
-            
+    # Buscar la provincia solo CERCA del label
+    window_start = label_match.end()
+    window_end = min(len(text), window_start + 150)
+    window_text = text[window_start:window_end]
+    
+    prov_match = _PROVINCIA_RE.search(window_text)
+    if prov_match:
+        pais_match = _PAIS_RE.search(window_text)
+        lugar = f"{prov_match.group(0).strip()}, {pais_match.group(0).strip() if pais_match else 'Panamá'}"
         return ValidationResult(
             code="VL-07",
             label="Lugar de nacimiento (Provincia + País)",
             passed=True,
             severity="error",
-            detail=f"Lugar de nacimiento detectado: «{lugar}»",
-        )
-
-    # Si hay valor de siguiente línea aunque sea sin provincia
-    if next_line_value:
-        return ValidationResult(
-            code="VL-07",
-            label="Lugar de nacimiento (Provincia + País)",
-            passed=False,
-            severity="error",
-            detail=(
-                f"Valor «{next_line_value[:60]}» no incluye provincia panameña. "
-                "Debe indicar Provincia + País (ej. 'Chiriquí, Panamá'). "
-                "Afecta hoja de datos y Cocotito pág. 1."
-            ),
+            detail=f"Lugar de nacimiento detectado en texto: «{lugar}»",
         )
 
     return ValidationResult(
@@ -570,11 +638,7 @@ def val_lugar_nacimiento(text: str) -> ValidationResult:
         label="Lugar de nacimiento (Provincia + País)",
         passed=False,
         severity="error",
-        detail=(
-            "Campo encontrado pero valor ilegible o en blanco. "
-            "Debe indicar Provincia + País (ej. 'Chiriquí, Panamá'). "
-            "Afecta hoja de datos y Cocotito pág. 1."
-        ),
+        detail="Campo encontrado, pero no se detectó una provincia panameña válida contigua. Afecta hoja de datos y Cocotito pág. 1.",
     )
 
 
@@ -728,28 +792,39 @@ def val_info_conyugue(text: str) -> ValidationResult:
     """VL-12: Si estado civil es casado/unido, la info del cónyuge es obligatoria.
 
     Extrae: nombre del cónyuge, si labora y nombre de la empresa.
-    Usa una ventana de texto obtenida mediante Fuzzy Matching desde 'informacion del conyuge'
-    o alternativamente desde 'nombre empresa'.
+    Prioriza la salida estructurada de Ollama ('Estado Civil: ...').
+    Usa una ventana de texto mediante Fuzzy Matching como fallback.
     """
-    # 1. Detectar si el label Estado Civil está mediante Regex clásico, y si falla, usar Fuzzy
-    label_m = _ESTADO_CIVIL_LABEL_RE.search(text)
-    idx_ec = label_m.start() if label_m else fuzzy_find(text, "estado civil", threshold=80.0)
-    
     estado_str = "no detectado"
     is_casado = False
-    
-    if idx_ec != -1:
-        ventana_ec = text[idx_ec: idx_ec + 80]
-        # El val_ec ya no necesita (?i) porque el texto entra normalizado por completo,
-        # pero mantenemos el Regex por si text no es 100% normalizado internamente (aunque lo es en run_all_validations).
-        val_ec = re.search(r'(casad[oa]|unid[oa]|solter[oa]|divorciado?|viud[oa]|separad[oa])', ventana_ec, re.IGNORECASE)
-        if val_ec:
-            estado_str = val_ec.group(1).strip().title()
-            is_casado = bool(re.search(r'\b(?:casad[oa]|unid[oa])\b', estado_str, re.IGNORECASE))
+    es_soltero = False
+
+    # 1. Intentar con salida de Ollama iterando páginas
+    for ollama_m in _ESTADO_CIVIL_OLLAMA_RE.finditer(text):
+        candidato = ollama_m.group(1).strip()
+        if candidato.upper() != "NO ENCONTRADO":
+            val_ec = _ESTADO_CIVIL_VALUE_RE.search(candidato)
+            if val_ec:
+                estado_str = val_ec.group(1).strip().title()
+                is_casado = bool(re.search(r'\b(?:casad[oa]|unid[oa])\b', estado_str, re.IGNORECASE))
+                es_soltero = bool(re.search(r'\bsolter[ao]\b', estado_str, re.IGNORECASE))
+                break
+
+    # 2. Fallback al OCR clásico si Ollama no encontró nada
+    if estado_str == "no detectado":
+        label_m = _ESTADO_CIVIL_LABEL_RE.search(text)
+        idx_ec = label_m.start() if label_m else fuzzy_find(text, "estado civil", threshold=80.0)
+        
+        if idx_ec != -1:
+            ventana_ec = text[idx_ec: idx_ec + 80]
+            val_ec = _ESTADO_CIVIL_VALUE_RE.search(ventana_ec)
+            if val_ec:
+                estado_str = val_ec.group(1).strip().title()
+                is_casado = bool(re.search(r'\b(?:casad[oa]|unid[oa])\b', estado_str, re.IGNORECASE))
+                es_soltero = bool(re.search(r'\bsolter[ao]\b', estado_str, re.IGNORECASE))
     
     # Manejar soltero/no casado
     if not is_casado:
-        es_soltero = bool(re.search(r'\bsolter[ao]\b', estado_str, re.IGNORECASE))
         detail = (
             f"N/A ({estado_str}). Sección de cónyuge no aplica para persona soltera."
             if es_soltero
@@ -769,7 +844,13 @@ def val_info_conyugue(text: str) -> ValidationResult:
     # Tratamos de conseguir ancla con 'nombre empresa' 
     idx_empresa = fuzzy_find(text, "nombre empresa", threshold=85.0)
     
-    if idx_empresa == -1:
+    if idx_empresa == -1 and not has_conyugue:
+        # Intentar más anclas: "nombre del cónyuge", "datos del cónyuge", "datos conyugales"
+        idx_empresa = fuzzy_find(text, "nombre del conyuge", threshold=80.0)
+        if idx_empresa == -1:
+            idx_empresa = fuzzy_find(text, "datos del conyuge", threshold=80.0)
+    
+    if idx_empresa == -1 and not has_conyugue:
         # OCR destruyó por completo o la sección no existe
         return ValidationResult(
             code="VL-12",
@@ -777,8 +858,8 @@ def val_info_conyugue(text: str) -> ValidationResult:
             passed=False,
             severity="error",
             detail=(
-                "Estado civil casado/unido pero NO se detectó sección de cónyuge (Ancla 'Nombre Empresa'). "
-                "Campo obligatorio — debe completarse antes de procesar el préstamo."
+                f"Estado civil {estado_str.lower()} pero NO se detectó sección de cónyuge "
+                "(Anclas 'Nombre Empresa', 'Conyuge/Esposo'). Campo obligatorio."
             ),
         )
 
