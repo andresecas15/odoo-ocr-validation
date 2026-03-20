@@ -181,7 +181,6 @@ Para garantizar una inferencia fluida y tiempos de procesamiento óptimos (minut
 - **Memoria RAM:** 32 GB mínimo (64 GB recomendado para manejar múltiples workers sin cuellos de botella).
 - **GPU (Acelerador Gráfico):** Tarjeta NVIDIA con **mínimo 16 GB de VRAM** (ideal 24 GB+).  
   *Opciones de Consumo:* RTX 3090, RTX 4090.  
-  *Opciones Enterprise u ഹോsting en la Nube:* NVIDIA A10G, L4, A100.
 - **Almacenamiento:** Unidad SSD NVMe de 500 GB o superior. Los modelos de lenguaje pesan varios Gigabytes y requieren altas velocidades de lectura al cargarse en memoria.
 
 ### Instalación de Dependencias Previas en el Nuevo Servidor
@@ -262,3 +261,132 @@ docker compose restart odoo ocr_engine
 ```
 
 *(El reinicio de los contenedores será inmediato, la descarga del modelo de Ollama ya se encuentra en caché global).*
+
+---
+
+# Release Notes — v16.0.1.4.0
+
+**Fechas:** 17 al 20 de marzo de 2026
+
+---
+
+**Depuración final del motor de validaciones y documentación del proyecto.** Tras múltiples pruebas con expedientes reales (PRES/0018, PRES/0019), se identificaron y corrigieron falsos positivos/negativos en 6 validaciones. Adicionalmente, se creó el `README.md` completo del proyecto con guías de despliegue y herencia del módulo.
+
+## Qué se corrigió / mejoró
+
+### VL-03 — NSS: detección del label "No. Seguro Social"
+
+El regex `_NSS_LABEL_RE` no coincidía con la variante `"No. Seguro Social:"` (con la preposición "de") que aparece en ciertos formularios CIES. Se amplió el patrón para aceptar `(?:de\s+)?` de forma opcional entre el número y "seguro social".
+
+También se añadió soporte para la salida estructurada de Ollama que usa `"Numero de Seguro Social:"` como label.
+
+**Archivo:** `ocr_microservice/validators.py`
+
+---
+
+### VL-05 — Cargo/Posición: filtro de valores falsos
+
+Ollama ocasionalmente devolvía `"Rango"` como valor del cargo, confundiendo el label "Rango Salarial" adyacente con un cargo del solicitante. Se amplió la lista de valores rechazados (`"RANGO"`, `"NO"`, `"NO RANGO"`, `"N/A"`, etc.) para evitar que estos falsos positivos pasen como cargo válido.
+
+También se aplicó un filtro anti-numérico: valores que son puramente números (ej. `"1992"`) ya no se aceptan como cargo.
+
+**Archivo:** `ocr_microservice/validators.py`
+
+---
+
+### VL-06 — Rango Salarial: dos pasadas + validación de ambos montos
+
+**Problema:** El sistema tomaba el primer número `>= 100` encontrado (ej. `1992`) y lo reportaba como salario, cuando el rango real `1200.01 - 1500.00` aparecía en otra sección del texto.
+
+**Solución implementada:**
+
+1. **Primera pasada (prioridad):** Buscar un **rango explícito** `X - Y` tanto en la salida de Ollama como en todas las ventanas del texto. Un rango siempre es preferido sobre un monto suelto.
+2. **Segunda pasada (fallback):** Solo si no existe ningún rango, aceptar un monto simple `>= 100`.
+3. **Validación de ambos montos:** Ahora AMBOS números del rango deben ser `>= 100` para ser aceptados. Esto elimina rangos absurdos como `1992 - 33.00` donde el segundo número claramente no es un salario.
+
+**Archivo:** `ocr_microservice/validators.py`
+
+---
+
+### VL-07 — Lugar de Nacimiento: "Panamá" como provincia válida
+
+Se agregó `"Panamá"` como provincia independiente válida en `_PROVINCIA_RE`. Anteriormente solo se aceptaba `"Panamá Oeste"` y la forma sola era rechazada, causando falsos negativos en personas nacidas en la capital.
+
+**Archivo:** `ocr_microservice/validators.py`
+
+---
+
+### VL-11 — Dirección: soporte para "DATOS RESIDENCIALES" y "DIRECCIÓN RESIDENCIAL"
+
+El regex `_DIRECCION_RE` solo coincidía con labels como `"DIRECCIÓN"` o `"DOMICILIO"`, pero los formularios CIES usan headers más específicos:
+
+- `"DIRECCIÓN RESIDENCIAL"` → Ahora soportado con `(?:\s+residencial)?`
+- `"DATOS RESIDENCIALES"` → Agregado como variante nueva del label
+
+Esto permite que la dirección `"BARRIADA LA FORESTA A, CASA SIN NUMERO..."` sea correctamente detectada.
+
+**Archivo:** `ocr_microservice/validators.py`
+
+---
+
+### VL-12 — Información de Cónyuge: anclas ampliadas
+
+**Problema:** La validación dependía exclusivamente de encontrar `"Nombre Empresa"` mediante fuzzy matching como ancla de la sección de cónyuge. Si el OCR no producía ese texto exacto, la validación fallaba aunque el documento sí contenía datos del cónyuge.
+
+**Solución:**
+
+1. Se incorporó la detección de palabras clave como `cónyuge`, `esposo`, `esposa`, `matrimonio`, `pareja` en el texto. Si alguna existe, la validación no aborta por falta del ancla `"Nombre Empresa"`.
+2. Se agregaron anclas alternativas via fuzzy matching: `"nombre del cónyuge"` y `"datos del cónyuge"`.
+3. El mensaje de error ahora incluye el estado civil detectado para facilitar la depuración.
+
+**Archivo:** `ocr_microservice/validators.py`
+
+---
+
+### Prevención de "spillover" entre campos
+
+Se actualizaron los regexes de múltiples validaciones para usar **lookahead assertions** que cortan la captura cuando aparece el label del campo siguiente. Esto previene que, al normalizar el texto (eliminando saltos de línea), un campo capture el contenido del siguiente:
+
+- `_MOTIVO_VALUE_RE` (VL-02)
+- `_CARGO_OLLAMA_RE` (VL-05)
+- `_NACIMIENTO_OLLAMA_RE` (VL-07)
+- `val_referencias` (VL-04)
+- `_SALARIO_OLLAMA_RE` (VL-06)
+
+**Archivo:** `ocr_microservice/validators.py`
+
+---
+
+### Mejora en calidad de imagen para LLM
+
+Se aumentó la resolución de conversión PDF → imagen de 150 DPI a **200 DPI**, y la calidad JPEG de 80 a **90**. Esto mejora significativamente la lectura de texto fino y tablas por parte de MiniCPM-V.
+
+**Archivo:** `ocr_microservice/services.py`
+
+---
+
+### README.md del proyecto
+
+Se creó la documentación completa del proyecto incluyendo:
+
+- **Arquitectura** del sistema (diagrama de componentes)
+- **Escenarios de despliegue:**
+  - **Escenario A:** Odoo en servidor existente (nativo) + Ollama/OCR Engine en servidor dedicado
+  - **Escenario B:** Todo en un solo servidor via Docker Compose
+- **Guía de herencia** del módulo (modelos, vistas, menús, y validaciones custom)
+- **Cómo ocultar el módulo del tablero** de aplicaciones Odoo al heredarlo
+- **Tabla de las 13 validaciones**, requisitos de hardware, y troubleshooting
+
+**Archivo:** `README.md`
+
+---
+
+## Para aplicar
+
+```bash
+# Reiniciar solo el motor OCR (validators.py se monta como bind mount):
+docker compose restart ocr_engine
+```
+
+El addon de Odoo no requiere actualización para estos cambios.
+

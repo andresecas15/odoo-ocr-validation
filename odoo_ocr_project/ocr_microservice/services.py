@@ -97,8 +97,9 @@ def decode_pdf(file_data_b64: str) -> bytes:
 
 def pdf_to_images(pdf_bytes: bytes) -> list:
     try:
-        # Menor DPI para aligerar procesamiento local antes de subirse
-        images = convert_from_bytes(pdf_bytes, dpi=120, fmt="jpeg")
+        # Mejor DPI para que el Vision Model pueda leer las tablas pequeñas ("Datos Laborales")
+        # sin quedarse sin RAM (OOM) en un servidor local. 200 dpi es el balance óptimo.
+        images = convert_from_bytes(pdf_bytes, dpi=200, fmt="jpeg")
         logger.info("PDF convertido a %d página(s).", len(images))
         return images
     except Exception as exc:
@@ -144,22 +145,33 @@ def run_ocr(images: list) -> str:
     for i, pil_image in enumerate(images):
         logger.info("Procesando página %d/%d con modelo Ollama (%s)...", i+1, len(images), LLM_MODEL_NAME)
         
-        # Convertir a Base64
+        # Convertir a Base64 con alta calidad para evitar difuminado de números
         buffered = BytesIO()
-        pil_image.save(buffered, format="JPEG", quality=70)
+        pil_image.save(buffered, format="JPEG", quality=90)
         img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
         
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "Eres un sistema de OCR avanzado y preciso. Tu ÚNICO propósito es extraer todo el texto visible "
-                    "en la imagen de forma LITERAL, línea por línea.\n"
+                    "Eres un asistente experto en extracción de datos estructurados a partir de expedientes de crédito. "
+                    "Tu objetivo es leer la imagen y extraer EXACTAMENTE los campos solicitados utilizando el formato clave-valor. "
                     "REGLAS CRÍTICAS:\n"
-                    "1. NO resumas la información.\n"
-                    "2. NO agrupes en categorías o bloques (no uses '**Client Information:**', '**Amount:**', etc.).\n"
-                    "3. NO omitas ningún dato. Nombres, Cédulas, Lugares de Nacimiento, Cargos, y montos de Salario son críticos.\n"
-                    "4. Escribe exactamente lo que ves, de izquierda a derecha y de arriba a abajo."
+                    "1. Busca exhaustivamente en toda la imagen (tablas, encabezados, letras pequeñas, casillas de verificación).\n"
+                    "2. NO inventes datos. Si un campo no está, escribe 'NO ENCONTRADO'.\n"
+                    "3. DEBES devolver tu respuesta respetando exactamente esta plantilla:\n\n"
+                    "Cedula: [valor]\n"
+                    "Motivo de Prestamo: [tipo de crédito o préstamo, ej. PRESTAMOS CIES]\n"
+                    "Numero de Seguro Social: [NSS si lo hay]\n"
+                    "Referencia Bancaria: [mencionar si está presente]\n"
+                    "Referencia Personal: [mencionar si está presente]\n"
+                    "Cargo o Posicion: [ej. Educador, Doctor, etc.]\n"
+                    "Rango Salarial o Salario: [Rango exacto o monto, ej. 1500.01 - 1800.00 o 1500.00]\n"
+                    "Lugar de Nacimiento: [Provincia visible, ej. Veraguas, Chiriqui, Panama]\n"
+                    "Efectividad: [mencionar si existe]\n"
+                    "Numero de Planilla: [valor]\n"
+                    "Estado Civil: [valor]\n"
+                    "Texto Adicional: [breve resumen de campos extra que consideres útiles, como fechas o montos adicionales]"
                 )
             },
             {
@@ -167,7 +179,7 @@ def run_ocr(images: list) -> str:
                 "content": [
                     {
                         "type": "text", 
-                        "text": "Transcribe todo el texto de esta imagen literalmente. No agrupes la información ni estructures en markdown. Extrae cada campo y valor tal cual aparecen, sin saltarte números de cédula, direcciones, lugares de nacimiento o salarios."
+                        "text": "Analiza la imagen y extrae la información completando estrictamente la plantilla solicitada. Presta mucha atención a las 'Referencias Bancarias/Personales' escritas en listas, a la 'Provincia' en el campo de nacimiento, al 'Motivo/Tipo de préstamo', y al 'Salario' en formato de moneda."
                     },
                     {
                         "type": "image_url",
