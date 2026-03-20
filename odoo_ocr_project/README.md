@@ -51,15 +51,58 @@ Inteligencia Artificial. Extrae texto de documentos PDF con un LLM multimodal
 
 ## Requisitos del servidor
 
-| Componente            | Mínimo                    | Recomendado                |
-|-----------------------|---------------------------|----------------------------|
-| **RAM**               | 8 GB                      | 16 GB                      |
-| **CPU**               | 4 cores                   | 8 cores                    |
-| **Disco**             | 20 GB libres              | 50 GB (modelos + datos)    |
-| **GPU** (si Ollama local) | —                     | NVIDIA con 6+ GB VRAM     |
-| **Docker**            | 20.10+                    | 24+                        |
-| **Docker Compose**    | v2.0+                     | v2.20+                     |
-| **SO**                | Ubuntu 20.04 / Debian 11  | Ubuntu 22.04 LTS           |
+Los servicios (Odoo, Ollama, OCR Engine, PostgreSQL) corren de forma
+simultánea. Los requisitos aseguran que no haya contención de recursos
+cuando se procesan documentos mientras otros usuarios trabajan en Odoo.
+
+### Escenario B — Todo en un solo servidor
+
+| Componente            | Mínimo (funciona con lentitud)  | Recomendado (producción fluida)  |
+|-----------------------|---------------------------------|----------------------------------|
+| **RAM**               | 16 GB                           | 32 GB                            |
+| **CPU**               | 8 cores / 16 threads            | 16 cores / 32 threads            |
+| **Disco SSD**         | 50 GB libres                    | 100 GB SSD NVMe                  |
+| **GPU** (Ollama)      | — (funciona en CPU, más lento)  | NVIDIA con 8+ GB VRAM (RTX 3060+)|
+| **Docker**            | 20.10+                          | 24+                              |
+| **Docker Compose**    | v2.0+                           | v2.20+                           |
+| **SO**                | Ubuntu 20.04 / Debian 11        | Ubuntu 22.04 LTS                 |
+| **Red**               | 100 Mbps                        | 1 Gbps                           |
+
+**Distribución estimada de RAM (simultáneo):**
+
+| Servicio       | RAM estimada   | Notas                                      |
+|----------------|----------------|---------------------------------------------|
+| PostgreSQL     | 1 – 2 GB       | Cache de BD + conexiones activas            |
+| Odoo           | 2 – 4 GB       | Workers, sesiones de usuarios               |
+| Ollama         | 4 – 6 GB       | MiniCPM-V cargado en memoria               |
+| OCR Engine     | 2 – 4 GB       | YOLO + procesamiento de imágenes (4 workers)|
+| **Total**      | **9 – 16 GB**  | Dejar margen para el SO (~2 GB)             |
+
+### Escenario A — Servidores separados
+
+**Servidor Odoo (existente):**
+
+| Componente | Mínimo        | Notas                                    |
+|------------|---------------|------------------------------------------|
+| **RAM**    | 4 GB libres   | Solo el addon OCR + requests             |
+| **Disco**  | 10 GB         | Almacenamiento de PDFs                   |
+| **Red**    | 100 Mbps      | Comunicación HTTP con servidor IA        |
+
+**Servidor IA (dedicado):**
+
+| Componente        | Mínimo                   | Recomendado                       |
+|-------------------|--------------------------|-----------------------------------|
+| **RAM**           | 12 GB                    | 16 GB                             |
+| **CPU**           | 4 cores                  | 8 cores                           |
+| **Disco SSD**     | 30 GB libres             | 50 GB SSD                         |
+| **GPU**           | — (CPU funciona)         | NVIDIA 8+ GB VRAM (RTX 3060+)    |
+| **Docker**        | 20.10+                   | 24+                               |
+| **SO**            | Ubuntu 20.04 / Debian 11 | Ubuntu 22.04 LTS                  |
+
+> ⚡ **GPU vs CPU:** Con GPU (NVIDIA + CUDA), Ollama procesa cada página
+> en ~2-3 segundos. Sin GPU (solo CPU), el mismo proceso toma ~15-30
+> segundos por página. Para expedientes de 18+ páginas, la GPU reduce
+> el tiempo total de ~9 minutos a ~1 minuto.
 
 ---
 
