@@ -12,6 +12,10 @@ class AnalyzeRequest(BaseModel):
         ...,
         description="Contenido del PDF codificado en Base64",
     )
+    loan_type: Optional[str] = Field(
+        default="cies",
+        description="Tipo de préstamo (cies, ons, ventanilla)"
+    )
 
 class AnalyzeResponse(BaseModel):
     """Esquema de respuesta del análisis."""

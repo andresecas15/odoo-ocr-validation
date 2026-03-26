@@ -1,10 +1,10 @@
-# 📄 Validación OCR de Documentos – Préstamos Cíes y Ons
+# 📄 Validación OCR de Documentos – Préstamos Cíes, Ons y Ventanilla
 
 > **Odoo 16 · FastAPI · Ollama (MiniCPM-V) · YOLO v8**
 
 Módulo de validación documental que analiza expedientes de préstamos mediante
 Inteligencia Artificial. Extrae texto de documentos PDF con un LLM multimodal
-(Ollama + MiniCPM-V), detecta firmas y huellas con YOLO, y ejecuta
+(Ollama + MiniCPM-V) y opcionalmente YOLO v8, y ejecuta
 **13 reglas de validación automática** contra los datos del expediente.
 
 ---
@@ -42,8 +42,8 @@ Inteligencia Artificial. Extrae texto de documentos PDF con un LLM multimodal
 **Flujo:**
 1. El usuario sube un PDF en Odoo → el módulo lo envía al microservicio OCR.
 2. El OCR Engine convierte cada página a imagen y la envía a Ollama para
-   extracción de texto estructurado.
-3. YOLO detecta firmas y huellas dactilares.
+   extracción de texto estructurado y detección de firmas.
+3. Se detectan huellas dactilares y conteo primario de firmas con YOLO (si está habilitado).
 4. Se ejecutan 13 validaciones regex/fuzzy contra el texto extraído.
 5. Los resultados se devuelven a Odoo y se muestran como un checklist.
 

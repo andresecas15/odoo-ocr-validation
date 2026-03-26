@@ -904,6 +904,7 @@ def val_info_conyugue(text: str) -> ValidationResult:
 def val_proximidad_huella_firma(
     boxes_firma: list[list[float]],
     boxes_huella: list[list[float]],
+    loan_type: str = "cies",
 ) -> ValidationResult:
     """VL-13: Firma y huella no deben estar alejadas entre sí en la página.
 
@@ -911,6 +912,15 @@ def val_proximidad_huella_firma(
         boxes_firma:  Lista de bounding boxes [x1, y1, x2, y2] de firmas detectadas por YOLO.
         boxes_huella: Lista de bounding boxes [x1, y1, x2, y2] de huellas detectadas por YOLO.
     """
+    if loan_type == "ventanilla":
+        return ValidationResult(
+            code="VL-13",
+            label="Proximidad huella-firma",
+            passed=True,
+            severity="warning",
+            detail="Validación de proximidad omitida para Préstamo Ventanilla.",
+        )
+
     if not boxes_firma or not boxes_huella:
         return ValidationResult(
             code="VL-13",
@@ -962,6 +972,7 @@ def run_all_validations(
     boxes_firma: list[list[float]],
     boxes_huella: list[list[float]],
     pages_firma: list[int] | None = None,
+    loan_type: str = "cies",
 ) -> list[ValidationResult]:
     """Ejecuta las 13 validaciones en orden y retorna la lista de resultados."""
     # ── NORMALIZACIÓN PREVIA DE TEXTO (Aplica para todas las validaciones base) ──
@@ -980,5 +991,5 @@ def run_all_validations(
         val_numero_planilla(norm_text),
         val_direccion_longitud(norm_text),
         val_info_conyugue(norm_text),
-        val_proximidad_huella_firma(boxes_firma, boxes_huella),
+        val_proximidad_huella_firma(boxes_firma, boxes_huella, loan_type),
     ]

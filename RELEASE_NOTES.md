@@ -390,3 +390,41 @@ docker compose restart ocr_engine
 
 El addon de Odoo no requiere actualización para estos cambios.
 
+---
+
+# Release Notes — v16.0.1.5.0
+
+**Fecha:** 25 de marzo de 2026
+
+---
+
+**Expansión de Tipos de Préstamo y Optimización de Rendimiento IA:** Se añadió soporte integral para un nuevo tipo de producto crediticio y se simplificó la arquitectura de IA deshabilitando modelos redundantes para salvaguardar el rendimiento (RAM/VRAM) del servidor.
+
+## Qué se agregó / mejoró
+
+### Soporte para "Préstamo Ventanilla"
+Se agregó formalmente el **Préstamo Ventanilla** al ecosistema del OCR. 
+- **Odoo:** Añadido `ventanilla` al campo `loan_type` de `project.loan.document`. El addon ahora transmite este tipo de documento al microservicio.
+- **FastAPI:** El payload `AnalyzeRequest` recibe el `loan_type`. 
+- **Lógica condicional:** Para Préstamo Ventanilla, las validaciones corren idénticas a Cíes/Ons, **excepto por VL-13 (Proximidad huella-firma)**, la cual se omite automáticamente y devuelve `passed=True` con severidad `warning`, pues no se requiere esta medida de seguridad para este producto.
+
+**Archivos:** `addons/project_ocr_validation/models/loan_document.py`, `ocr_microservice/schemas.py`, `ocr_microservice/main.py`, `ocr_microservice/validators.py`.
+
+---
+
+### YOLOv8 Desactivado (Delegación total a LLM)
+Para optimizar el rendimiento y disminuir cuellos de botella en procesamiento, **YOLOv8 fue desactivado por defecto**.
+- Antes, YOLO consumía memoria leyendo la imagen en busca de las coordenadas (Bounding Boxes) de firmas y huellas para las validaciones VL-09 y VL-13.
+- Ahora, como VL-13 ya no aplica a Ventanilla, **MiniCPM-V** asume directamente el análisis visual de las firmas. Se actualizó el **Prompt del Sistema** en `services.py` para obligar al LLM a indicar detalladamente si detecta firmas ("Firmas: SI/NO"). El conteo para VL-09 se alimenta ahora estrictamente del razonamiento multimodal del MiniCPM.
+
+**Archivos:** `ocr_microservice/services.py`, `ocr_microservice/main.py`.
+
+---
+
+## Para aplicar
+
+El código en Odoo fue modificado (`loan_document.py`); requiere **actualizar el módulo** en la interfaz. El contenedor OCR debe reiniciarse para aplicar el nuevo Prompt y apagar YOLO.
+
+```bash
+docker compose restart ocr_engine
+```

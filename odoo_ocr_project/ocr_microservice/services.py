@@ -47,42 +47,36 @@ def load_models() -> None:
         )
         ocr_client = None
 
-    if os.path.isfile(YOLO_MODEL_PATH):
-        logger.info("Cargando modelo YOLO desde '%s'...", YOLO_MODEL_PATH)
-        try:
-            import torch
-            
-            # Temporary patch to torch.load to force weights_only=False for YOLO model
-            original_load = torch.load
-            def patched_load(*args, **kwargs):
-                kwargs['weights_only'] = False
-                return original_load(*args, **kwargs)
-            
-            torch.load = patched_load
-            try:
-                yolo_model = YOLO(YOLO_MODEL_PATH)
-            finally:
-                torch.load = original_load
-                
-            logger.info("Modelo YOLO cargado exitosamente.")
-        except Exception as exc:
-            logger.warning(
-                "No se pudo cargar el modelo YOLO: %s. "
-                "La detección de firmas/huellas estará deshabilitada.",
-                exc,
-            )
-            yolo_model = None
-    else:
-        logger.warning(
-            "═══════════════════════════════════════════════════════════════\n"
-            "  ⚠️  MODELO YOLO NO ENCONTRADO – detección visual DESHABILITADA\n"
-            "  Ruta esperada: %s\n"
-            "  → Entrena tu modelo y copia 'best.pt' en la carpeta models_ml/\n"
-            "  → El OCR de texto seguirá operativo.\n"
-            "═══════════════════════════════════════════════════════════════",
-            YOLO_MODEL_PATH,
-        )
-        yolo_model = None
+    # YOLO desactivado por motivos de rendimiento a petición del usuario.
+    # En caso de querer reactivarlo, descomentar el bloque inferior.
+    logger.info("Modelo YOLO DESACTIVADO manual/intencionalmente. La detección de firmas dependerá del LLM.")
+    yolo_model = None
+    
+    # if os.path.isfile(YOLO_MODEL_PATH):
+    #     logger.info("Cargando modelo YOLO desde '%s'...", YOLO_MODEL_PATH)
+    #     try:
+    #         import torch
+    #         
+    #         original_load = torch.load
+    #         def patched_load(*args, **kwargs):
+    #             kwargs['weights_only'] = False
+    #             return original_load(*args, **kwargs)
+    #         
+    #         torch.load = patched_load
+    #         try:
+    #             yolo_model = YOLO(YOLO_MODEL_PATH)
+    #         finally:
+    #             torch.load = original_load
+    #             
+    #         logger.info("Modelo YOLO cargado exitosamente.")
+    #     except Exception as exc:
+    #         logger.warning(
+    #             "No se pudo cargar el modelo YOLO: %s.", exc
+    #         )
+    #         yolo_model = None
+    # else:
+    #     logger.warning("MODELO YOLO NO ENCONTRADO.")
+    #     yolo_model = None
 
 
 def decode_pdf(file_data_b64: str) -> bytes:
@@ -109,7 +103,7 @@ def pdf_to_images(pdf_bytes: bytes) -> list:
         ) from exc
 
 
-def extract_text_statistics(full_text: str) -> tuple[int, int, int, Optional[str]]:
+def extract_text_statistics(full_text: str) -> tuple[int, int, int, Optional[str], bool]:
     import re
     fecha_word_count = len(re.findall(r"(?i)\bfechas?\b", full_text))
     firma_word_count = len(re.findall(r"(?i)\bfirm\w*", full_text))
@@ -128,7 +122,9 @@ def extract_text_statistics(full_text: str) -> tuple[int, int, int, Optional[str
         fecha_str = " | ".join(fechas_unicas)
         logger.info("Fechas encontradas: %s", fecha_str)
         
-    return fecha_word_count, firma_word_count, fecha_value_count, fecha_str
+    llm_firma_detected = bool(re.search(r'(?i)firmas?\s*[:\-]?\s*s[ií]\b', full_text))
+        
+    return fecha_word_count, firma_word_count, fecha_value_count, fecha_str, llm_firma_detected
 
 
 def run_ocr(images: list) -> str:
@@ -171,6 +167,7 @@ def run_ocr(images: list) -> str:
                     "Efectividad: [mencionar si existe]\n"
                     "Numero de Planilla: [valor]\n"
                     "Estado Civil: [valor]\n"
+                    "Firmas: [Indica detalladamente SI detectas firmas manuscritas en la página y cuántas (Ej. SI, 2)]\n"
                     "Texto Adicional: [breve resumen de campos extra que consideres útiles, como fechas o montos adicionales]"
                 )
             },

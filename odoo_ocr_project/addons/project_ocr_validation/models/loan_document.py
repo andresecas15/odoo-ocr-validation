@@ -81,6 +81,7 @@ class LoanDocument(models.Model):
         selection=[
             ("cies", "Préstamo Cíes"),
             ("ons", "Préstamo Ons"),
+            ("ventanilla", "Préstamo Ventanilla"),
         ],
         string="Tipo de Préstamo",
         required=True,
@@ -166,6 +167,7 @@ class LoanDocument(models.Model):
             payload = {
                 "filename": self.pdf_filename or self.name,
                 "file_data": file_data,
+                "loan_type": self.loan_type,
             }
 
             db_name = self.env.cr.dbname

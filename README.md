@@ -1,7 +1,7 @@
 # project_ocr_validation — Módulo Odoo 16
 
-Módulo de **validación documental automatizada** para expedientes de préstamos Cíes y Ons.  
-Integra un microservicio Python (FastAPI + Ollama LLM + YOLO) con Odoo para analizar PDFs y aplicar 13 reglas de cumplimiento documental.
+Módulo de **validación documental automatizada** para expedientes de préstamos Cíes, Ons y Ventanilla.  
+Integra un microservicio Python (FastAPI + Ollama LLM) con Odoo para analizar PDFs y aplicar 13 reglas de cumplimiento documental.
 
 > **Nota para IT:** Este módulo es autocontenido y funcional tal cual, pero está pensado para que el equipo técnico lo **herede** en su propio addon (`_inherit`) y lo adapte al modelo de negocio (carpeta de crédito, project.task, account.move, etc.) sin modificar este módulo base.
 
@@ -16,7 +16,7 @@ Odoo (addon)                           Microservicio (Docker)
 │  (project.loan.document)     │ HTTP │  POST /api/v1/validate-loan  │
 │  Llamada vía Cron Asíncrono  │ ───► │                              │
 │                              │      │  Ollama (MiniCPM) →  OCR     │
-│  ValidationLine              │ ◄─── │  YOLO             →  visual  │
+│  ValidationLine              │ ◄─── │  YOLO (Opcional)→  visual  │
 │  (×13 reglas VL)             │ JSON │  validators.py    →  13 VLs  │
 └──────────────────────────────┘      └──────────────────────────────┘
 ```
@@ -34,7 +34,7 @@ Modelo principal. Un registro = un expediente PDF a validar.
 | Campo | Tipo | Descripción |
 |---|---|---|
 | `name` | `Char` | Secuencia automática `PRES/0001`. Solo editable en Borrador. |
-| `loan_type` | `Selection` | Tipo: `cies` (Préstamo Cíes) / `ons` (Préstamo Ons). |
+| `loan_type` | `Selection` | Tipo: `cies` (Préstamo Cíes) / `ons` (Préstamo Ons) / `ventanilla` (Préstamo Ventanilla). |
 | `pdf_file` | `Binary` | PDF adjunto del expediente (almacenado como attachment). |
 | `pdf_filename` | `Char` | Nombre del archivo, para mostrar en la vista. |
 | `state` | `Selection` | Flujo: `draft → processing → done / error`. |
@@ -73,14 +73,14 @@ Modelo base para análisis OCR sin reglas de negocio específicas.
 | `document_type` | `Selection` | Tipo A / B / C (extensible). |
 | `attachment_id` | `Many2one` → `ir.attachment` | PDF adjunto (domain: solo `application/pdf`). |
 | `state` | `Selection` | `draft / processing / done / error`. |
-| `has_signature` | `Boolean` | Firma detectada por YOLO. |
+| `has_signature` | `Boolean` | Firma detectada por el LLM o YOLO. |
 | `has_fingerprint` | `Boolean` | Huella detectada por YOLO. |
 | `has_date` | `Boolean` | Fecha encontrada por PaddleOCR. |
 | `extracted_date` | `Char` | Valor(es) de fecha extraídos. |
 | `fecha_word_count` | `Integer` | Ocurrencias de la palabra "fecha" en el texto. |
 | `fecha_value_count` | `Integer` | Valores de fecha encontrados (patrones `dd/mm/yyyy`, etc.). |
 | `firma_word_count` | `Integer` | Ocurrencias de la palabra "firma" en el texto. |
-| `firma_detected_count` | `Integer` | Firmas detectadas por YOLO. |
+| `firma_detected_count` | `Integer` | Firmas detectadas por LLM visual o YOLO. |
 | `analysis_details` | `Text` | JSON técnico interactivo con la predicción del LLM Ollama. |
 | `validation_summary` | `Char` (computed) | Resumen visual: `✅ Firma \| ❌ Huella \| ✅ Fecha: 11/03/2026`. |
 
@@ -100,7 +100,7 @@ Aplicadas sobre el texto OCR del expediente:
 | VL-06 | Rango salarial | Error | Monto o rango salarial presente en el formulario. |
 | VL-07 | Lugar de nacimiento | Error | Provincia + País detectados. |
 | VL-08 | Efectividades en órdenes de descuento | Warning | Campo de efectividad presente (puede no aplica según tipo). |
-| VL-09 | Firma en cotización | Error | Al menos una firma YOLO en páginas del expediente. Muestra páginas. |
+| VL-09 | Firma en cotización | Error | Al menos una firma detectada en el expediente. |
 | VL-10 | Número de planilla | Error | Planilla presente para cotejo. |
 | VL-11 | Longitud de dirección | Warning | Dirección residencial ≤ 120 caracteres. |
 | VL-12 | Información de cónyuge | Warning | Si es casado/unido: verifica sección cónyuge. Si es soltero: `N/A`. |

@@ -80,12 +80,12 @@ async def analyze_pdf(request: AnalyzeRequest) -> AnalyzeResponse:
 
     # 3: Extracción de texto y fecha con PaddleOCR
     extracted_text = run_ocr(images)
-    fecha_word_count, firma_word_count, fecha_value_count, fecha_valor = extract_text_statistics(extracted_text)
+    fecha_word_count, firma_word_count, fecha_value_count, fecha_valor, llm_firma_detected = extract_text_statistics(extracted_text)
 
     # 4: Detección de firmas y huellas con YOLO
     firma_count, huella_count = run_yolo(images)
     
-    firma_detected = firma_count > 0
+    firma_detected = firma_count > 0 or llm_firma_detected
     huella_detected = huella_count > 0
     fecha_encontrada = fecha_value_count > 0
 
@@ -148,15 +148,16 @@ async def validate_loan(request: AnalyzeRequest) -> LoanValidationResponse:
     images = pdf_to_images(pdf_bytes)
     extracted_text = run_ocr(images)
 
-    fecha_word_count, firma_word_count, fecha_value_count, fecha_valor = extract_text_statistics(extracted_text)
+    fecha_word_count, firma_word_count, fecha_value_count, fecha_valor, llm_firma_detected = extract_text_statistics(extracted_text)
 
     # Usamos run_yolo_detailed para obtener las coordenadas de los bounding boxes y las páginas
     firma_count, huella_count, boxes_firma, boxes_huella, pages_firma, pages_huella = run_yolo_detailed(images)
-    firma_detected = firma_count > 0
+    firma_detected = firma_count > 0 or llm_firma_detected
     huella_detected = huella_count > 0
 
     # Ejecutar las 13 validaciones
-    results = run_all_validations(extracted_text, firma_detected, boxes_firma, boxes_huella, pages_firma)
+    loan_type_value = getattr(request, "loan_type", "cies")
+    results = run_all_validations(extracted_text, firma_detected, boxes_firma, boxes_huella, pages_firma, loan_type_value)
 
     total_errors = sum(1 for r in results if not r.passed and r.severity == "error")
     total_warnings = sum(1 for r in results if not r.passed and r.severity == "warning")
