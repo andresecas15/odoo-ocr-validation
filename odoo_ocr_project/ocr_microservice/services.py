@@ -47,36 +47,35 @@ def load_models() -> None:
         )
         ocr_client = None
 
-    # YOLO desactivado por motivos de rendimiento a petición del usuario.
-    # En caso de querer reactivarlo, descomentar el bloque inferior.
-    logger.info("Modelo YOLO DESACTIVADO manual/intencionalmente. La detección de firmas dependerá del LLM.")
-    yolo_model = None
+    # YOLO reactivado para el servidor con GPU.
+    # logger.info("Modelo YOLO DESACTIVADO manual/intencionalmente. La detección de firmas dependerá del LLM.")
+    # yolo_model = None
     
-    # if os.path.isfile(YOLO_MODEL_PATH):
-    #     logger.info("Cargando modelo YOLO desde '%s'...", YOLO_MODEL_PATH)
-    #     try:
-    #         import torch
-    #         
-    #         original_load = torch.load
-    #         def patched_load(*args, **kwargs):
-    #             kwargs['weights_only'] = False
-    #             return original_load(*args, **kwargs)
-    #         
-    #         torch.load = patched_load
-    #         try:
-    #             yolo_model = YOLO(YOLO_MODEL_PATH)
-    #         finally:
-    #             torch.load = original_load
-    #             
-    #         logger.info("Modelo YOLO cargado exitosamente.")
-    #     except Exception as exc:
-    #         logger.warning(
-    #             "No se pudo cargar el modelo YOLO: %s.", exc
-    #         )
-    #         yolo_model = None
-    # else:
-    #     logger.warning("MODELO YOLO NO ENCONTRADO.")
-    #     yolo_model = None
+    if os.path.isfile(YOLO_MODEL_PATH):
+        logger.info("Cargando modelo YOLO desde '%s'...", YOLO_MODEL_PATH)
+        try:
+            import torch
+            
+            original_load = torch.load
+            def patched_load(*args, **kwargs):
+                kwargs['weights_only'] = False
+                return original_load(*args, **kwargs)
+            
+            torch.load = patched_load
+            try:
+                yolo_model = YOLO(YOLO_MODEL_PATH)
+            finally:
+                torch.load = original_load
+                
+            logger.info("Modelo YOLO cargado exitosamente.")
+        except Exception as exc:
+            logger.warning(
+                "No se pudo cargar el modelo YOLO: %s.", exc
+            )
+            yolo_model = None
+    else:
+        logger.warning("MODELO YOLO NO ENCONTRADO.")
+        yolo_model = None
 
 
 def decode_pdf(file_data_b64: str) -> bytes:
@@ -129,16 +128,16 @@ def extract_text_statistics(full_text: str) -> tuple[int, int, int, Optional[str
 
 def run_ocr(images: list) -> str:
     import time
+    from concurrent.futures import ThreadPoolExecutor
     if ocr_client is None:
         logger.error("Cliente LLM no está inicializado.")
         return ""
 
-    logger.info("Preparando %d páginas para enviar a Ollama de a 1 por vez para ahorrar RAM en CPU...", len(images))
+    logger.info("Preparando %d páginas para enviar a Ollama concurrentemente...", len(images))
     
-    extracted_text_parts = []
+    extracted_text_parts = [None] * len(images)
     
-    # Procesar página por página para evitar desborde de RAM en LLM Local
-    for i, pil_image in enumerate(images):
+    def process_page(i: int, pil_image) -> None:
         logger.info("Procesando página %d/%d con modelo Ollama (%s)...", i+1, len(images), LLM_MODEL_NAME)
         
         # Convertir a Base64 con alta calidad para evitar difuminado de números
@@ -152,21 +151,31 @@ def run_ocr(images: list) -> str:
                 "content": (
                     "Eres un asistente experto en extracción de datos estructurados a partir de expedientes de crédito. "
                     "Tu objetivo es leer la imagen y extraer EXACTAMENTE los campos solicitados utilizando el formato clave-valor. "
-                    "REGLAS CRÍTICAS:\n"
-                    "1. Busca exhaustivamente en toda la imagen (tablas, encabezados, letras pequeñas, casillas de verificación).\n"
-                    "2. NO inventes datos. Si un campo no está, escribe 'NO ENCONTRADO'.\n"
-                    "3. DEBES devolver tu respuesta respetando exactamente esta plantilla:\n\n"
-                    "Cedula: [valor]\n"
+                    "REGLAS DE EXTRACCIÓN CRÍTICAS:\n"
+                    "1. TABLA DATOS LABORALES: La sección 'DATOS LABORALES' tiene la estructura:\n"
+                    "   Tipo de Cliente | Cargo o Posición | Salario | Teléfono\n"
+                    "   Asegúrate de extraer en 'Cargo o Posicion' el valor de la segunda columna (ej. 'Oficinista', 'Educador') y NO el Tipo de Cliente (ej. 'Gobierno', 'Privado').\n"
+                    "2. TALONARIO CSS: En el talonario de Seguro Social (CSS), el número de Seguro Social ('No. S. SOCIAL' o 'No. SEG. SOCIAL') puede aparecer como '0999-9999'. El número 'No. COLABORADOR' (ej. '8-21-06-0-01979') corresponde al 'Número de Planilla' y NO a la Cédula ni al Seguro Social. Extráelos correctamente.\n"
+                    "3. INFORMACIÓN DEL CÓNYUGE: Extrae los datos del cónyuge ÚNICAMENTE si estás leyendo la página del formulario de solicitud que contiene explícitamente la sección titulada 'INFORMACIÓN DEL CÓNYUGE'. Si estás en cualquier otra página (como copias de cédulas, cartas de trabajo o reportes APC), DEBES escribir 'NO ENCONTRADO' para todos los campos de cónyuge. No inventes ni extraigas nombres de personas de otras secciones o documentos.\n"
+                    "4. DIRECCIÓN RESIDENCIAL: Extrae la dirección residencial del cliente ÚNICAMENTE si estás leyendo la página del formulario de solicitud que contiene la sección titulada 'DATOS RESIDENCIALES'. Si estás en cualquier otra página (como copias de cédulas, cartas de trabajo o reportes APC), DEBES escribir 'NO ENCONTRADO' para este campo. No inventes ni extraigas nombres de personas o direcciones de otras secciones.\n"
+                    "5. Si un campo no está presente, escribe 'NO ENCONTRADO'.\n\n"
+                    "DEBES devolver tu respuesta respetando exactamente esta plantilla:\n\n"
+                    "Cedula: [Cédula del cliente (formato prov-tomo-asiento), ej. 8-733-1006. Si no hay, escribe 'NO ENCONTRADO']\n"
                     "Motivo de Prestamo: [tipo de crédito o préstamo, ej. PRESTAMOS CIES]\n"
-                    "Numero de Seguro Social: [NSS si lo hay]\n"
-                    "Referencia Bancaria: [mencionar si está presente]\n"
-                    "Referencia Personal: [mencionar si está presente]\n"
-                    "Cargo o Posicion: [ej. Educador, Doctor, etc.]\n"
-                    "Rango Salarial o Salario: [Rango exacto o monto, ej. 1500.01 - 1800.00 o 1500.00]\n"
-                    "Lugar de Nacimiento: [Provincia visible, ej. Veraguas, Chiriqui, Panama]\n"
+                    "Numero de Seguro Social: [NSS del cliente, ej. 0999-9999. Si no hay, escribe 'NO ENCONTRADO']\n"
+                    "Referencia Bancaria: [Nombre de los bancos listados como referencias, separados por comas. Si no hay ninguno, escribe 'NO ENCONTRADO']\n"
+                    "Referencia Personal: [Nombre completo de las personas listadas como referencias personales, separados por comas. Si no hay ninguno, escribe 'NO ENCONTRADO'. NO menciones firmas ni estados de firma aquí]\n"
+                    "Cargo o Posicion: [Cargo o posición del cliente en datos laborales, ej. Oficinista. NO pongas el tipo de cliente como Gobierno o Privado aquí]\n"
+                    "Rango Salarial o Salario: [Rango exacto o monto, ej. 1200.01 - 1500.00 o 669.18]\n"
+                    "Lugar de Nacimiento: [Provincia visible, ej. Veraguas, Chiriqui, Panama. Si no hay, escribe 'NO ENCONTRADO']\n"
                     "Efectividad: [mencionar si existe]\n"
-                    "Numero de Planilla: [valor]\n"
-                    "Estado Civil: [valor]\n"
+                    "Numero de Planilla: [Número de planilla o colaborador, ej. 8-21-06-0-01979. Si no hay, escribe 'NO ENCONTRADO']\n"
+                    "Estado Civil: [valor, ej. Casado(a), Soltero(a)]\n"
+                    "Conyuge Nombre: [Nombre completo del cónyuge en la sección de información del cónyuge. Si no hay o no aplica, escribe 'NO ENCONTRADO']\n"
+                    "Conyuge Cedula: [Cédula o Pasaporte del cónyuge escrito en el formulario, ej. 8-724-379. Escríbela tal cual aparece en el campo de Cédula/Pasaporte del cónyuge. Si no hay o no aplica, escribe 'NO ENCONTRADO']\n"
+                    "Conyuge Labora: [SI o NO si el cónyuge trabaja. Si no hay o no aplica, escribe 'NO ENCONTRADO']\n"
+                    "Conyuge Empresa: [Nombre de la empresa donde labora el cónyuge, ej. Empresa Privada. Si no hay o no aplica, escribe 'NO ENCONTRADO']\n"
+                    "Direccion Residencial: [Dirección residencial completa del cliente. Escríbela COMPLETA y de forma detallada, palabra por palabra, tal como aparece en el documento, ej. EDIFICIO PH ALTOS DEL NAZARETH, APARTAMENTO 445... Si no hay, escribe 'NO ENCONTRADO']\n"
                     "Firmas: [Indica detalladamente SI detectas firmas manuscritas en la página y cuántas (Ej. SI, 2)]\n"
                     "Texto Adicional: [breve resumen de campos extra que consideres útiles, como fechas o montos adicionales]"
                 )
@@ -207,12 +216,16 @@ def run_ocr(images: list) -> str:
             data = response.json()
             page_text = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             
-            extracted_text_parts.append(page_text)
+            extracted_text_parts[i] = page_text
             logger.info("✓ Página %d completada (%d caracteres).", i+1, len(page_text))
             
         except Exception as e:
             logger.error("Error en Ollama para página %d: %s", i+1, e)
-            extracted_text_parts.append(f"[Error leyendo página {i+1}]")
+            extracted_text_parts[i] = f"[Error leyendo página {i+1}]"
+
+    # Procesar concurrentemente con ThreadPoolExecutor (max_workers=4)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        executor.map(lambda pair: process_page(pair[0], pair[1]), enumerate(images))
 
     extracted_text = "\n\n".join(extracted_text_parts)
 
@@ -224,7 +237,6 @@ def run_ocr(images: list) -> str:
     logger.info("==============================")
     
     return extracted_text
-
 
 
 def run_yolo(images: list) -> tuple[int, int]:

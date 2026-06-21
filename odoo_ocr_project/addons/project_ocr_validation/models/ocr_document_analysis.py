@@ -15,7 +15,7 @@ from odoo.exceptions import UserError
 _logger = logging.getLogger(__name__)
 
 # URL del microservicio OCR dentro de la red Docker
-OCR_ENGINE_URL = "http://ocr_engine:8000/api/v1/analyze-pdf"
+OCR_ENGINE_URL = "http://172.17.0.33:8000/api/v1/analyze-pdf"
 
 
 class OcrDocumentAnalysis(models.Model):

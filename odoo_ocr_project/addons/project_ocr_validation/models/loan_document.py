@@ -18,7 +18,7 @@ from odoo.exceptions import UserError
 _logger = logging.getLogger(__name__)
 
 # URL del endpoint de validación de préstamos en el microservicio OCR
-LOAN_VALIDATE_URL = "http://ocr_engine:8000/api/v1/validate-loan"
+LOAN_VALIDATE_URL = "http://172.17.0.33:8000/api/v1/validate-loan"
 
 
 class LoanValidationLine(models.Model):

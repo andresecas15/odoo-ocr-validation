@@ -30,12 +30,31 @@ class ValidationResult:
     detail: Optional[str] = None  # Mensaje explicativo para el oficial
 
 
+def is_dummy_value(val: str) -> bool:
+    """Retorna True si el valor extraído es considerado un dummy o nulo."""
+    if not val:
+        return True
+    val_upper = val.upper().strip()
+    dummy_words = (
+        "NO ENCONTRADO", "NO APLICA", "NO REGISTRA", "SIN INFO", "NINGUNO", 
+        "NINGUNA", "NO CONTIENE", "NOT A PICTURED", "NOT PICTURED", 
+        "NOT A DOCUMENT", "NO SE MENCIONA", "INFORMACION NO DISPONIBLE"
+    )
+    if val_upper in ("", "NO", "N.A", "N/A", "?", "-", "NO DISPONIBLE"):
+        return True
+    for dummy in dummy_words:
+        if dummy in val_upper:
+            return True
+    return False
+
+
 # ─── Patrones regex ────────────────────────────────────────────────────────────
 
 # VL-01 – Cédula en formato panameño: 8-1234-56789 | PE-12-3456 | N-12-3456 | 2017-450 (Ollama a veces omite 8-)
 # Added \d{1,2}-\d{3,4}-\d{3,6} explicitly for 9-207-450 
 _CEDULA_RE = re.compile(
-    r'\b(?:[A-Z]{1,2}-\d{1,2}-\d{4,6}|\d{1,2}-\d{3,4}-\d{3,6}|\d{3,4}-\d{3,6})\b'
+    r'\b(?:(?:pe|n|e|pi|av)-\d{1,4}-\d{1,6}|(?:[1-9]|1[0-3])-\d{3,4}-\d{3,6})\b',
+    re.IGNORECASE
 )
 
 # VL-02 – Motivo de préstamo
@@ -84,8 +103,7 @@ _REF_OLLAMA_MISSING_RE = re.compile(r'(?i)referencia\s+(?:bancaria|personal)\s*[
 # o "- CARGO: DOCENTE" o "TIPO CUENTA: EDUCADOR".
 _CARGO_OLLAMA_RE = re.compile(
     # Captura valor hasta 60 chars, frena si ve otra etiqueta:
-    r'(?i)(?:cargo|posici[oó]n|ocupaci[oó]n|profesi[oó]n|tipo\s+cliente|tipo\s+cuenta)\s*[:\-]+\s*'
-    r'(?:[a-z]+\s*[\-]\s*)?'
+    r'(?i)(?:cargo|posici[oó]n|ocupaci[oó]n|profesi[oó]n)\s*[:\-]+\s*'
     r'(.{3,60}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)'
 )
 
@@ -164,7 +182,11 @@ _PLANILLA_FIELD_RE = re.compile(r'(?i)\b(?:planilla|n[oó]mina|sorte)\b')
 _PLANILLA_P_NUM_RE = re.compile(r'\bP(\d{5,12})\b')          # P0800013010
 _PLANILLA_NPR_RE = re.compile(r'N\.?PR(\d{2,4}[-]\d{2,6})')  # N.PR08-3722
 _PLANILLA_SIMPLE_RE = re.compile(r'\b(?<=[^A-Z\d-])(\d{2,4}-\d{3,6})\b')   # 08-3722 asegurando que no empiece tras un número o letra para no capturar el medio de la cédula 
+_PLANILLA_GOB_RE = re.compile(r'\b(?<=[^A-Z\d-])(\d{1,2}-\d{1,4}-\d{1,4}-\d{1,4}-\d{1,6})\b') # 8-21-06-0-01979 (Colaborador Gobierno)
 _PLANILLA_OLLAMA_RE = re.compile(r'(?i)\b(?:sorte|planilla|n[oó]mina)[\s:\-/]*(\d{2,6})') # SORTE/121
+_PLANILLA_OLLAMA_FIELD_RE = re.compile(
+    r'(?i)Numero de Planilla:\s*(?!no\s+encontrado)(.{2,40}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)'
+)
 
 # VL-11 – Dirección (longitud)
 # Captura máximo 200 chars para evitar leer el documento completo
@@ -182,7 +204,19 @@ _ESTADO_CIVIL_LABEL_RE = re.compile(r'(?i)\bestado\s+civil?\b')
 _ESTADO_CIVIL_OLLAMA_RE = re.compile(r'(?i)Estado Civil:\s*([A-Za-z0-9ÁÉÍÓÚÑáéíóúñ\.\,\-( )]+)')
 _ESTADO_CIVIL_VALUE_RE = re.compile(r'(?i)(casad[oa]|unid[oa]|solter[oa]|divorciado?|viud[oa]|separad[oa])')
 _CONYUGUE_RE = re.compile(
-    r'(?i)\bc[oó]nyuge\b|esposo|esposa'
+    r'(?i)\bc[oó]nyug?e\b|esposo|esposa'
+)
+_CONYUGUE_NOMBRE_OLLAMA_RE = re.compile(
+    r'(?i)Conyuge Nombre:\s*(?!no\s+encontrado)(.{2,60}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)'
+)
+_CONYUGUE_CEDULA_OLLAMA_RE = re.compile(
+    r'(?i)Conyuge Cedula:\s*(?!no\s+encontrado)(.{2,60}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)'
+)
+_CONYUGUE_LABORA_OLLAMA_RE = re.compile(
+    r'(?i)Conyuge Labora:\s*(?!no\s+encontrado)(.{2,10}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)'
+)
+_CONYUGUE_EMPRESA_OLLAMA_RE = re.compile(
+    r'(?i)Conyuge Empresa:\s*(?!no\s+encontrado)(.{2,60}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)'
 )
 # Anchor: 'nombre empresa' es el campo EXCLUSIVO de la sección cónyuge.
 # No usar 'información del cónyuge' (OCR puede no escribirlo igual).
@@ -270,10 +304,18 @@ def fuzzy_find(text: str, keyword: str, threshold: float = 85.0) -> int:
 def val_cedula_format(text: str) -> ValidationResult:
     """VL-01: Cédula de identidad presente y con formato válido."""
     matches = _CEDULA_RE.findall(text)
-    passed = len(matches) > 0
+    
+    # Eliminar duplicados manteniendo el orden
+    unique_matches = []
+    for m in matches:
+        if m not in unique_matches:
+            unique_matches.append(m)
+            
+    passed = len(unique_matches) > 0
+    first_cedula = unique_matches[0] if unique_matches else None
     detail = (
-        f"Cédulas encontradas: {', '.join(matches)}"
-        if matches
+        f"Cédula encontrada: {first_cedula}"
+        if first_cedula
         else "No se detectó ningún número de cédula con formato válido (ej. 8-1234-56789)."
     )
     return ValidationResult(
@@ -329,18 +371,26 @@ def val_motivo_prestamo(text: str) -> ValidationResult:
 def val_numero_seguro_social(text: str) -> ValidationResult:
     """VL-03: Número de Seguro Social (NSS) presente y con formato correcto.
 
-    Itera TODOS los matches del label 'Seguro Social' y elige el primero
-    cuya ventana de 80 chars contenga un valor numérico con guiones.
-    Esto evita confundir la mención en checklists de documentos ('Recibo
-    Seguro Social') con el campo real del formulario.
+    Itera TODOS los matches del label 'Seguro Social' y elige el primero.
+    No descarta si es igual a la cédula ni si es 0999-9999 (que es el NSS de planilla).
     """
     nss = None
-    for label_m in _NSS_LABEL_RE.finditer(text):
-        ventana = text[label_m.end(): label_m.end() + 80]
-        val_m = _NSS_VALUE_RE.search(ventana)
-        if val_m:
-            nss = val_m.group(1)
-            break  # primer match con valor es el campo real
+    # 1. Intentar con salida estructurada de Ollama
+    ollama_nss_re = re.compile(r'(?i)Numero de Seguro Social:\s*(?!no\s+encontrado)(.{2,40}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)')
+    for m in ollama_nss_re.finditer(text):
+        candidate = m.group(1).strip()
+        if not is_dummy_value(candidate):
+            nss = candidate
+            break
+
+    # 2. Fallback local en texto
+    if not nss:
+        for label_m in _NSS_LABEL_RE.finditer(text):
+            ventana = text[label_m.end(): label_m.end() + 80]
+            val_m = _NSS_VALUE_RE.search(ventana)
+            if val_m:
+                nss = val_m.group(1)
+                break
 
     passed = nss is not None
     detail = (
@@ -365,21 +415,23 @@ def val_referencias(text: str) -> ValidationResult:
     bancaria_ok = False
     for match in re.finditer(r'(?i)referencias?\s*bancarias?\s*[:\-]\s*(.{1,60}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)', text):
         val = match.group(1).strip().lower()
-        if val not in ("no encontrado", "?") and "no se menciona" not in val:
+        exclusions = ("no encontrado", "?", "no se menciona", "no aplica", "informacion no disponible", "no disponible", "si, ")
+        if not any(exc in val for exc in exclusions) and "firma" not in val and "manuscrita" not in val:
             bancaria_ok = True
             break
             
     personal_ok = False
     for match in re.finditer(r'(?i)referencias?\s*personales?\s*[:\-]\s*(.{1,60}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)', text):
         val = match.group(1).strip().lower()
-        if val not in ("no encontrado", "?") and "no se menciona" not in val:
+        exclusions = ("no encontrado", "?", "no se menciona", "no aplica", "informacion no disponible", "no disponible", "si, ")
+        if not any(exc in val for exc in exclusions) and "firma" not in val and "manuscrita" not in val:
             personal_ok = True
             break
             
-    # Si Ollama no extrajo nada con el formato estructurado, 
-    # comprobamos de forma legacy buscando la frase en cualquier lado.
-    if not bancaria_ok and not personal_ok:
+    # Si Ollama no extrajo la referencia estructurada, comprobamos de forma legacy.
+    if not bancaria_ok:
         bancaria_ok = bool(re.search(r'(?i)referencias?\s*bancarias?\b', text))
+    if not personal_ok:
         personal_ok = bool(re.search(r'(?i)referencias?\s*personales?\b', text))
 
     faltantes = []
@@ -411,7 +463,9 @@ def val_cargo_posicion(text: str) -> ValidationResult:
     # ── Estrategia 0 (Ollama Markdown format) ──
     for match_ in _CARGO_OLLAMA_RE.finditer(text):
         cargo_ollama = match_.group(1).strip()
-        if cargo_ollama.upper() not in ("NO ENCONTRADO", "NO", "NO RANGO", "RANGO", "NO APLICA", "NO REGISTRA", "NO TIENE", "?", "N/A"):
+        # Clean prefix and check if it's just client type
+        cargo_ollama = re.sub(r'^(?:gobierno|privado|independiente|jubilado|pensionado|publico|mixto)\s*[\-:]\s*', '', cargo_ollama, flags=re.IGNORECASE)
+        if not is_dummy_value(cargo_ollama) and cargo_ollama.upper() not in ("GOBIERNO", "PRIVADO", "INDEPENDIENTE", "JUBILADO", "PENSIONADO", "PUBLICO", "MIXTO"):
             # Filtro básico anti-numérico (no solo números)
             if len(cargo_ollama) >= 3 and not re.fullmatch(r'\d+', cargo_ollama.replace(' ', '')):
                 return ValidationResult(
@@ -694,31 +748,50 @@ def val_firma_cotizacion(text: str, firma_detected: bool, pages_firma: list[int]
 def val_numero_planilla(text: str) -> ValidationResult:
     """VL-10: Número de planilla / nómina presente (afecta F1-b en generales).
 
-    Busca los dos formatos reales de planilla panameña:
+    Busca los distintos formatos reales de planilla panameña:
+      - Estructurado por Ollama (ej. 8-21-06-0-01979)
       - P0800013010  (P + dígitos)
       - N.PR08-3722  (prefijo N.PR + código)
-    Muestra AMBOS candidatos si los encuentra y pide verificación.
+      - Formato Gobierno: 8-21-06-0-01979 (múltiples guiones)
+      - Formato simple: 08-3722
     """
     has_field = bool(_PLANILLA_FIELD_RE.search(text))
 
-    # Buscar los distintos formatos
-    p_match = _PLANILLA_P_NUM_RE.search(text)
-    npr_match = _PLANILLA_NPR_RE.search(text)
-    simple_match = _PLANILLA_SIMPLE_RE.search(text)
-    ollama_match = _PLANILLA_OLLAMA_RE.search(text)
-
     candidatos = []
-    if p_match:
-        candidatos.append(f"P{p_match.group(1)}")
-    if npr_match:
-        candidatos.append(f"N.PR{npr_match.group(1)}")
-    if simple_match and not p_match and not npr_match:
-        # Solo usar formato simple si no hay otro más específico
-        candidatos.append(simple_match.group(1))
-    if ollama_match and not p_match and not npr_match and not simple_match:
-        candidatos.append(ollama_match.group(1))
 
-    has_candidates = len(candidatos) > 0
+    # 1. Intentar con salida estructurada de Ollama
+    for ollama_field_m in _PLANILLA_OLLAMA_FIELD_RE.finditer(text):
+        val = ollama_field_m.group(1).strip()
+        if not is_dummy_value(val):
+            candidatos.append(val)
+
+    # 2. Buscar por expresiones regulares en fallback
+    if not candidatos:
+        gob_match = _PLANILLA_GOB_RE.search(text)
+        p_match = _PLANILLA_P_NUM_RE.search(text)
+        npr_match = _PLANILLA_NPR_RE.search(text)
+        simple_match = _PLANILLA_SIMPLE_RE.search(text)
+        ollama_match = _PLANILLA_OLLAMA_RE.search(text)
+
+        if gob_match:
+            candidatos.append(gob_match.group(1))
+        if p_match:
+            candidatos.append(f"P{p_match.group(1)}")
+        if npr_match:
+            candidatos.append(f"N.PR{npr_match.group(1)}")
+        if simple_match and not p_match and not npr_match and not gob_match:
+            candidatos.append(simple_match.group(1))
+        if ollama_match and not p_match and not npr_match and not simple_match and not gob_match:
+            candidatos.append(ollama_match.group(1))
+
+    # Eliminar duplicados y CÉDULAS falsas
+    cedulas = _CEDULA_RE.findall(text)
+    unique_candidates = []
+    for c in candidatos:
+        if c not in unique_candidates and c not in cedulas:
+            unique_candidates.append(c)
+
+    has_candidates = len(unique_candidates) > 0
 
     if not has_field and not has_candidates:
         return ValidationResult(
@@ -730,14 +803,14 @@ def val_numero_planilla(text: str) -> ValidationResult:
         )
 
     if has_candidates:
-        if len(candidatos) == 1:
+        if len(unique_candidates) == 1:
             detail = (
-                f"Planilla detectada: {candidatos[0]}. "
+                f"Planilla detectada: {unique_candidates[0]}. "
                 "Verificar que coincida con el número de planilla en carta de trabajo."
             )
         else:
             detail = (
-                f"Dos candidatos detectados: {' y '.join(candidatos)}. "
+                f"Dos candidatos detectados: {' y '.join(unique_candidates)}. "
                 "Comparar con la carta de trabajo para confirmar cuál es el número de planilla correcto."
             )
         return ValidationResult(
@@ -760,8 +833,24 @@ def val_numero_planilla(text: str) -> ValidationResult:
 
 def val_direccion_longitud(text: str) -> ValidationResult:
     """VL-11: Dirección no debe ser excesivamente larga (puede truncar contratos de cuenta ahorro)."""
-    match = _DIRECCION_RE.search(text)
-    if not match:
+    # 1. Buscar en la plantilla de Ollama
+    ollama_dir_re = re.compile(r'(?i)Direccion Residencial:\s*(?!no\s+encontrado)([\s\S]+?)(?=\n[A-Za-z0-9\s]+:|$)')
+    value = None
+    for m in ollama_dir_re.finditer(text):
+        val = m.group(1).strip()
+        if not is_dummy_value(val) and len(val) >= 10:
+            value = val
+            break
+            
+    # 2. Fallback al regex tradicional
+    if not value:
+        match = _DIRECCION_RE.search(text)
+        if match:
+            candidate = match.group(1).strip()
+            if not is_dummy_value(candidate) and len(candidate) >= 10:
+                value = candidate
+
+    if not value:
         return ValidationResult(
             code="VL-11",
             label="Longitud de dirección",
@@ -769,13 +858,13 @@ def val_direccion_longitud(text: str) -> ValidationResult:
             severity="warning",
             detail="No se detectó campo de dirección en el texto extraído.",
         )
-    value = match.group(1).strip()
+
     passed = len(value) <= _ADDRESS_MAX_CHARS
     detail = (
-        f"Dirección dentro del límite ({len(value)} caracteres). ✅"
+        f"Dirección detectada: «{value}» ({len(value)} caracteres). ✅"
         if passed
         else (
-            f"Dirección extensa: {len(value)} caracteres (límite recomendado: {_ADDRESS_MAX_CHARS}). "
+            f"Dirección extensa: «{value}» ({len(value)} caracteres, límite recomendado: {_ADDRESS_MAX_CHARS}). "
             "Puede generar truncamiento en los contratos de cuenta ahorro. Revisar con el oficial."
         )
     )
@@ -838,57 +927,124 @@ def val_info_conyugue(text: str) -> ValidationResult:
             detail=detail,
         )
 
-    # Buscar "nombre empresa" (anclaje para la sección cónyuge) vía Fuzzy o Regex
-    has_conyugue = bool(re.search(r'\bc[oó]nyuge\b|esposo|esposa', text, re.IGNORECASE))
-    
-    # Tratamos de conseguir ancla con 'nombre empresa' 
-    idx_empresa = fuzzy_find(text, "nombre empresa", threshold=85.0)
-    
-    if idx_empresa == -1 and not has_conyugue:
-        # Intentar más anclas: "nombre del cónyuge", "datos del cónyuge", "datos conyugales"
-        idx_empresa = fuzzy_find(text, "nombre del conyuge", threshold=80.0)
-        if idx_empresa == -1:
-            idx_empresa = fuzzy_find(text, "datos del conyuge", threshold=80.0)
-    
-    if idx_empresa == -1 and not has_conyugue:
-        # OCR destruyó por completo o la sección no existe
-        return ValidationResult(
-            code="VL-12",
-            label="Información de cónyuge",
-            passed=False,
-            severity="error",
-            detail=(
-                f"Estado civil {estado_str.lower()} pero NO se detectó sección de cónyuge "
-                "(Anclas 'Nombre Empresa', 'Conyuge/Esposo'). Campo obligatorio."
-            ),
-        )
+    # ── NUEVA ESTRATEGIA: Buscar campos estructurados de Ollama primero ──
+    nombre_str = None
+    cedula_str = None
+    labora_str = None
+    empresa_str = None
 
-    win_start = max(0, idx_empresa - 400)
-    win_end = min(len(text), idx_empresa + 200)
-    ventana = text[win_start:win_end]
+    # Find name first
+    target_match = None
+    for m in _CONYUGUE_NOMBRE_OLLAMA_RE.finditer(text):
+        val = m.group(1).strip().title()
+        if not is_dummy_value(val):
+            nombre_str = val
+            target_match = m
+            break
+
+    if target_match:
+        # We found a spouse name! Now look for the other fields near this match
+        start_idx = max(0, target_match.start() - 200)
+        end_idx = min(len(text), target_match.end() + 800)
+        window_text = text[start_idx:end_idx]
+
+        # Search for Cedula in this window
+        m_cedula = _CONYUGUE_CEDULA_OLLAMA_RE.search(window_text)
+        if m_cedula:
+            val = m_cedula.group(1).strip().upper()
+            if not is_dummy_value(val):
+                cedula_str = val
+
+        # Search for Labora in this window
+        m_labora = _CONYUGUE_LABORA_OLLAMA_RE.search(window_text)
+        if m_labora:
+            val = m_labora.group(1).strip().upper()
+            if val.upper() not in ("NO ENCONTRADO", "?", "", "N/A", "NO APLICA"):
+                labora_str = val
+
+        # Search for Empresa in this window
+        m_empresa = _CONYUGUE_EMPRESA_OLLAMA_RE.search(window_text)
+        if m_empresa:
+            val = m_empresa.group(1).strip().title()
+            if not is_dummy_value(val):
+                empresa_str = val
 
     partes = []
+    if nombre_str:
+        partes.append(f"Cónyuge: {nombre_str}")
+    if cedula_str:
+        partes.append(f"Cédula: {cedula_str}")
+    if labora_str:
+        partes.append(f"Labora: {labora_str}")
+    if empresa_str:
+        partes.append(f"Empresa: {empresa_str}")
 
-    # Extraer usando regex sobre la ventana acotada (el texto ya está normalizado a minúsculas, así que corregimos regex)
-    nombre_m = re.search(r'\b(?:[1-9n][0-9a-z\-]{3,11})\s+([a-záéíóúñ]{2,}(?:\s+[a-záéíóúñ]{2,}){1,4})\s+\d{7,9}\b', ventana)
-    labora_m = re.search(r'(?:e?labora)[?!]?.{0,300}?\b(si)\b\s+no\s+x|(?:e?labora)[?!]?.{0,300}?x\s+(si)\b\s+no|(?:e?labora)[?!]?.{0,300}?\b(si)\s+x\b', ventana)
-    empresa_m = re.search(r'nombre\s+empresa\s+(?!referencias?|datos|solicitud|direcci[oó]n|tel[eé]fono|parentesco)([a-záéíóúñ]{2,}(?:\s+[a-záéíóúñ]{2,}){0,4})', ventana)
-    
-    if nombre_m:
-        nombre = nombre_m.group(1).strip().title()
-        partes.append(f"Cónyuge: {nombre[:40]}")
+    # Fallback legacy si la plantilla de Ollama no devolvió información estructurada del cónyuge
+    if not partes:
+        # Buscar "nombre empresa" (anclaje para la sección cónyuge) vía Fuzzy o Regex
+        has_conyugue = bool(re.search(r'\bc[oó]nyug?e\b|esposo|esposa', text, re.IGNORECASE))
+        
+        # Tratamos de conseguir ancla con 'nombre empresa' 
+        idx_empresa = fuzzy_find(text, "nombre empresa", threshold=85.0)
+        
+        if idx_empresa == -1 and not has_conyugue:
+            # Intentar más anclas: "nombre del cónyuge", "datos del cónyuge", "datos conyugales"
+            idx_empresa = fuzzy_find(text, "nombre del conyuge", threshold=80.0)
+            if idx_empresa == -1:
+                idx_empresa = fuzzy_find(text, "datos del conyuge", threshold=80.0)
+        
+        if idx_empresa == -1 and not has_conyugue:
+            # OCR destruyó por completo o la sección no existe
+            return ValidationResult(
+                code="VL-12",
+                label="Información de cónyuge",
+                passed=False,
+                severity="error",
+                detail=(
+                    f"Estado civil {estado_str.lower()} pero NO se detectó sección de cónyuge "
+                    "(Anclas 'Nombre Empresa', 'Conyuge/Esposo'). Campo obligatorio."
+                ),
+            )
 
-    if labora_m:
-        partes.append(f"Labora: SI")
+        # Si no hay ancla de empresa pero sí se detectó la palabra de cónyuge, 
+        # buscamos una ventana alrededor de la palabra cónyuge/esposo.
+        if idx_empresa == -1:
+            match_c = re.search(r'\bc[oó]nyug?e\b|esposo|esposa', text, re.IGNORECASE)
+            idx_anchor = match_c.start() if match_c else 0
+        else:
+            idx_anchor = idx_empresa
 
-    if empresa_m:
-        empresa = empresa_m.group(1).strip().title()
-        if len(empresa) >= 3:
-            partes.append(f"Empresa: {empresa[:40]}")
+        win_start = max(0, idx_anchor - 400)
+        win_end = min(len(text), idx_anchor + 200)
+        ventana = text[win_start:win_end]
+
+        # Extraer usando regex sobre la ventana acotada
+        nombre_m = re.search(r'\b(?:[1-9n][0-9a-z\-]{3,11})\s+([a-záéíóúñ]{2,}(?:\s+[a-záéíóúñ]{2,}){1,4})\s+\d{7,9}\b', ventana)
+        labora_m = re.search(r'(?:e?labora)[?!]?.{0,300}?\b(si)\b\s+no\s+x|(?:e?labora)[?!]?.{0,300}?x\s+(si)\b\s+no|(?:e?labora)[?!]?.{0,300}?\b(si)\s+x\b', ventana)
+        empresa_m = re.search(r'nombre\s+empresa\s+(?!referencias?|datos|solicitud|direcci[oó]n|tel[eé]fono|parentesco)([a-záéíóúñ]{2,}(?:\s+[a-záéíóúñ]{2,}){0,4})', ventana)
+        
+        if nombre_m:
+            nombre_val = nombre_m.group(1).strip().title()
+            partes.append(f"Cónyuge: {nombre_val[:40]}")
+
+        if labora_m:
+            partes.append(f"Labora: SI")
+
+        if empresa_m:
+            empresa_val = empresa_m.group(1).strip().title()
+            if len(empresa_val) >= 3:
+                partes.append(f"Empresa: {empresa_val[:40]}")
 
     if partes:
         resumen = " | ".join(partes)
         detail = f"{resumen}. Verificar coincidencia con los documentos presentados."
+        return ValidationResult(
+            code="VL-12",
+            label="Información de cónyuge",
+            passed=True,
+            severity="error",
+            detail=detail,
+        )
     else:
         detail = "Sección de cónyuge detectada pero valores ilegibles por OCR. Verificar nombre y datos laborales."
 
@@ -922,15 +1078,18 @@ def val_proximidad_huella_firma(
         )
 
     if not boxes_firma or not boxes_huella:
+        missing = []
+        if not boxes_firma:
+            missing.append("firmas")
+        if not boxes_huella:
+            missing.append("huellas")
+        detail = f"Faltante: No se detectaron {', '.join(missing)} en el documento. Imposible evaluar proximidad."
         return ValidationResult(
             code="VL-13",
             label="Proximidad huella-firma",
-            passed=True,
+            passed=False,
             severity="warning",
-            detail=(
-                "Sin suficientes detecciones para evaluar proximidad "
-                "(se necesita al menos una firma y una huella)."
-            ),
+            detail=detail,
         )
 
     def _center(box: list[float]) -> tuple[float, float]:

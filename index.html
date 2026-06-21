@@ -4,273 +4,532 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Flujo de Validación OCR — Grupo Saleta</title>
+    <title>Documentación Técnica: Motor de Validación OCR — Grupo Saleta</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         .mermaid {
             width: 100%;
             display: flex;
             justify-content: center;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.375rem;
+            padding: 1.5rem 0;
         }
 
         .mermaid svg {
             width: 100% !important;
-            max-width: 1400px !important;
+            max-width: 950px !important;
             height: auto !important;
-            min-height: 700px;
-        }
-
-        .badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 9999px;
-            font-size: 0.7rem;
-            font-weight: 600;
-        }
-
-        .badge-error {
-            background: #fee2e2;
-            color: #991b1b;
-        }
-
-        .badge-warn {
-            background: #fef9c3;
-            color: #854d0e;
-        }
-
-        .badge-ok {
-            background: #dcfce7;
-            color: #166534;
         }
     </style>
 </head>
 
-<body class="bg-slate-100 min-h-screen p-4 md:p-8 font-sans">
+<body class="bg-slate-50 text-slate-900 min-h-screen font-mono text-sm leading-relaxed antialiased">
 
-    <div class="max-w-7xl mx-auto space-y-6">
+    <!-- Top Navigation Bar -->
+    <div class="bg-white border-b border-slate-200 py-4 px-6 md:px-12 sticky top-0 z-50 shadow-sm flex items-center justify-between">
+        <div>
+            <span class="font-bold text-slate-800">Grupo Saleta</span>
+            <span class="text-slate-400 mx-2">/</span>
+            <span class="text-slate-600">Documentación OCR Préstamos</span>
+        </div>
+        <div class="text-xs text-slate-500">
+            Última actualización: 21 de junio de 2026 · v16.0.1.3.0
+        </div>
+    </div>
 
-        <!-- Header -->
-        <div class="bg-blue-950 text-white p-6 rounded-xl shadow-xl text-center">
-            <h1 class="text-2xl font-bold">Flujo de Validación Documental — Préstamos Cíes y Ons</h1>
-            <p class="text-blue-300 mt-1 text-sm">Odoo 16 · FastAPI · Ollama (MiniCPM-V) · YOLO · 13 Reglas VL</p>
+    <!-- Main Container -->
+    <div class="max-w-5xl mx-auto px-6 py-8 space-y-12">
+
+        <!-- Page Header -->
+        <div class="space-y-2">
+            <h1 class="text-3xl font-bold text-slate-950 font-sans tracking-tight">
+                Especificación Técnica del Motor de Validación Documental
+            </h1>
+            <p class="text-slate-600 text-sm max-w-3xl">
+                Este documento describe el flujo de validación automática para los expedientes de préstamos de planes Cíes y Ons mediante procesamiento concurrente por Inteligencia Artificial y la integración con el backend de Odoo 16.
+            </p>
         </div>
 
-        <!-- Diagrama principal -->
-        <div class="bg-white rounded-xl shadow-lg p-6 overflow-x-auto">
-            <h2 class="text-base font-semibold text-slate-700 mb-4">Flujo de extremo a extremo</h2>
-            <pre class="mermaid">
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#eff6ff', 'lineColor': '#1e3a8a', 'fontFamily': 'Inter, sans-serif', 'fontSize': '15px'}}}%%
+        <!-- Table of Contents -->
+        <div class="bg-white border border-slate-200 rounded-lg p-5 space-y-2 shadow-sm">
+            <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Índice del documento</h2>
+            <ul class="space-y-1 text-slate-700">
+                <li><a href="#flujo-procesamiento" class="text-blue-600 hover:underline">1. Flujo de Procesamiento y Ejecución en GPU</a></li>
+                <li><a href="#arquitectura-componentes" class="text-blue-600 hover:underline">2. Arquitectura de Despliegue y Contenedores</a></li>
+                <li><a href="#reglas-validacion" class="text-blue-600 hover:underline">3. Matriz de Reglas de Validación (13 VL)</a></li>
+                <li><a href="#bitacora-cambios" class="text-blue-600 hover:underline">4. Registro de Cambios y Modificaciones (21/06/2026)</a></li>
+            </ul>
+        </div>
+
+        <!-- Section 1: Flujo de Procesamiento -->
+        <section id="flujo-procesamiento" class="space-y-4">
+            <h2 class="text-lg font-bold text-slate-950 border-b border-slate-200 pb-2 font-sans flex items-center gap-2">
+                <span>1.</span> Flujo de Procesamiento y Ejecución en GPU
+            </h2>
+            <p class="text-slate-700">
+                La validación de expedientes de crédito (ej. archivos PDF) se realiza renderizando las páginas a imágenes de alta definición (200 DPI) para posteriormente ejecutar análisis concurrentes utilizando el modelo de lenguaje de visión <strong>Qwen2.5-VL-8k</strong> operado localmente sobre Ollama. La detección de firmas y huellas es asistida por un modelo visual complementario <strong>YOLOv8</strong>.
+            </p>
+            
+            <div class="space-y-2">
+                <h3 class="font-bold text-slate-900 text-xs uppercase tracking-wider">Flujo de interacción de componentes (Secuencia)</h3>
+                <div class="bg-white border border-slate-200 rounded-lg p-4 overflow-x-auto">
+                    <pre class="mermaid">
 sequenceDiagram
     autonumber
     actor Oficial as Oficial de Crédito
-    participant Odoo   as Odoo 16<br/>(LoanDocument)
-    participant API    as FastAPI<br/>/validate-loan
-    participant OCR    as Ollama<br/>(MiniCPM-V)
-    participant YOLO   as YOLO<br/>(visual)
-    participant Val    as validators.py<br/>(13 reglas VL)
+    participant Odoo as Odoo 16 (web)
+    participant API as FastAPI (ocr_engine)
+    participant OCR as Ollama GPU (qwen2.5vl)
+    participant YOLO as YOLOv8 GPU (best.pt)
+    participant Val as validators.py (Python)
 
-    rect rgb(239,246,255)
-    Note over Oficial, Odoo: PASO 1 — Carga del expediente
-    Oficial->>Odoo: Sube PDF + elige tipo (Cíes / Ons)
-    Oficial->>Odoo: Clic en «Inicia Validación (Segundo Plano)»
-    Odoo->>Odoo: Genera secuencia PRES/XXXX
-    Odoo->>Odoo: Configura Cron Job Asíncrono
+    Oficial->>Odoo: Carga PDF de expediente + selecciona plan (Cíes/Ons)
+    Oficial->>Odoo: Ejecuta "Inicia Validación"
+    Odoo->>API: HTTP POST /api/v1/validate-loan {pdf_base64, plan}
+    API->>API: Convierte PDF a imágenes JPG (200 DPI)
+    Note over API, OCR: Concurrencia vía ThreadPoolExecutor (max_workers=4)
+    par Inferencia de Texto
+        API->>OCR: POST /api/chat/completions (Imagen de página + Prompt estructurado)
+        OCR-->>API: Respuesta estructurada en texto (Cédula, NSS, Cargo, etc.)
+    and Detección Visual
+        API->>YOLO: Envía imagen para inferencia CUDA
+        YOLO-->>API: Coordenadas Bounding Box de firmas y huellas
     end
+    API->>Val: Invoca run_all_validations(texto_completo, boxes_yolo)
+    Note right of Val: Procesa texto con normalize_ocr_text()<br/>Filtra dummies con is_dummy_value()<br/>Aplica expresiones regulares de VL-01 a VL-13
+    Val-->>API: Array de ValidationResult (13 resultados individuales)
+    API->>API: Calcula loan_compliance (Conforme / Observado / No conforme)
+    API-->>Odoo: Retorna JSON de resultados de validación
+    Odoo->>Odoo: Persiste resultados en la base de datos de Odoo
+    Odoo-->>Oficial: Muestra resultados y semáforo en interfaz
+                    </pre>
+                </div>
+            </div>
+        </section>
 
-    rect rgb(255,251,235)
-    Note over Odoo, YOLO: PASO 2 — OCR y YOLO mediante FastAPI (Threads)
-    Odoo->>API: HTTP POST /api/v1/validate-loan<br/>{pdf: base64, timeout: cron}
-    API->>API: Convierte PDF → imágenes por página
-    par Texto (Ollama LLM)
-        API->>OCR: Página 1..N → Inferencia Verbatim
-        OCR-->>API: Transcripción Literal Completa<br/>(~50 000 chars)
-    and Visual (YOLO best.pt)
-        API->>YOLO: Página 1..N → detectar firma/huella
-        YOLO-->>API: Boxes por clase + página<br/>firma: [p5,p6,p15] | huella: []
-    end
-    end
+        <!-- Section 2: Arquitectura y Despliegue -->
+        <section id="arquitectura-componentes" class="space-y-4">
+            <h2 class="text-lg font-bold text-slate-950 border-b border-slate-200 pb-2 font-sans flex items-center gap-2">
+                <span>2.</span> Arquitectura de Despliegue y Contenedores
+            </h2>
+            <p class="text-slate-700">
+                La solución se despliega utilizando Docker Compose sobre un servidor con GPU dedicada en el host remoto <code>172.17.0.33</code>. La infraestructura está conformada por los siguientes contenedores:
+            </p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="bg-white border border-slate-200 rounded-lg p-4 space-y-2">
+                    <span class="font-bold text-xs text-indigo-700 font-mono">odoo_ocr_engine</span>
+                    <h4 class="font-bold text-slate-800 text-xs">Microservicio FastAPI</h4>
+                    <p class="text-slate-600 text-xs leading-relaxed">
+                        Controla el ciclo de procesamiento de archivos. Recibe las llamadas REST, gestiona el hilo de paralelización con 4 trabajadores del pool, y evalúa las expresiones regulares en <code class="bg-slate-100 px-1 py-0.5 rounded">validators.py</code>. Posee montajes de volumen directa a los archivos de código para hot-reload.
+                    </p>
+                </div>
+                
+                <div class="bg-white border border-slate-200 rounded-lg p-4 space-y-2">
+                    <span class="font-bold text-xs text-indigo-700 font-mono">odoo_ocr_ollama</span>
+                    <h4 class="font-bold text-slate-800 text-xs">Servidor de Inferencia Ollama</h4>
+                    <p class="text-slate-600 text-xs leading-relaxed">
+                        Contenedor configurado con la biblioteca CUDA de Nvidia (Count: All) para transferir la carga de cómputo a la GPU NVIDIA RTX 5080. Carga el modelo de visión <code class="bg-slate-100 px-1 py-0.5 rounded">qwen2.5vl-8k</code> y admite ejecución paralela mediante configuración de variables de entorno.
+                    </p>
+                </div>
+            </div>
+        </section>
 
-    rect rgb(240,253,244)
-    Note over API, Val: PASO 3 — Aplicación de las 13 reglas VL
-    API->>Val: validate_all(texto, yolo_boxes)
-    Note right of Val: VL-01 Cédula<br/>VL-02 Motivo<br/>VL-03 NSS (label+ventana)<br/>VL-04 Referencias plural<br/>VL-05 Cargo<br/>VL-06 Salario<br/>VL-07 Nacimiento<br/>VL-08 Efectividades<br/>VL-09 Firma (páginas)<br/>VL-10 Planilla<br/>VL-11 Dirección<br/>VL-12 Cónyuge / Estado civil<br/>VL-13 Proximidad huella-firma
-    Val-->>API: [{code, label, passed, severity, detail}×13]
-    API->>API: Cuenta errores y warnings<br/>Determina loan_compliance
-    API-->>Odoo: JSON {validations[13], firma, huella,<br/>fecha_valor, loan_compliance}
-    end
+        <!-- Section 3: Reglas de Validación -->
+        <section id="reglas-validacion" class="space-y-4">
+            <h2 class="text-lg font-bold text-slate-950 border-b border-slate-200 pb-2 font-sans flex items-center gap-2">
+                <span>3.</span> Matriz de Reglas de Validación (13 VL)
+            </h2>
+            <p class="text-slate-700">
+                Las siguientes reglas se ejecutan de manera lineal en la función principal del backend. Cada regla se clasifica según su criticidad:
+            </p>
 
-    rect rgb(253,240,255)
-    Note over Odoo, Oficial: PASO 4 — Persistencia y resultado
-    Odoo->>Odoo: Crea 13 LoanValidationLine<br/>state = done
-    Odoo->>Odoo: loan_compliance = conforme|observado|no_conforme
-    Odoo-->>Oficial: Vista con ✅/❌/⚠️ por cada regla VL
-    end
-            </pre>
-        </div>
-
-        <!-- Grid: Reglas VL + Arquitectura -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-
-            <!-- Tabla reglas VL -->
-            <div class="bg-white rounded-xl shadow-lg p-6">
-                <h2 class="text-base font-semibold text-slate-700 mb-3">Reglas de validación (validators.py)</h2>
-                <table class="w-full text-sm">
+            <div class="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
+                <table class="w-full text-left border-collapse text-xs md:text-sm">
                     <thead>
-                        <tr class="bg-slate-50 text-slate-500 uppercase text-xs">
-                            <th class="text-left py-2 px-2 rounded-l">Código</th>
-                            <th class="text-left py-2 px-2">Regla</th>
-                            <th class="text-center py-2 px-2 rounded-r">Tipo</th>
+                        <tr class="bg-slate-100 text-slate-700 border-b border-slate-200 font-bold uppercase tracking-wider text-[11px]">
+                            <th class="py-3 px-4">Código</th>
+                            <th class="py-3 px-4">Regla</th>
+                            <th class="py-3 px-4">Severidad</th>
+                            <th class="py-3 px-4">Especificación de Validación en Código</th>
                         </tr>
                     </thead>
-                    <tbody class="divide-y divide-slate-100">
+                    <tbody class="divide-y divide-slate-200 text-slate-750">
                         <tr>
-                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-01</td>
-                            <td class="py-1.5 px-2">Cédula / Datos del cliente</td>
-                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                            <td class="py-3 px-4 font-mono font-bold text-blue-700">VL-01</td>
+                            <td class="py-3 px-4 font-medium">Cédula / Datos del cliente</td>
+                            <td class="py-3 px-4"><span class="bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-bold text-[10px]">Error</span></td>
+                            <td class="py-3 px-4">Regex robusto para cédulas panameñas. Retorna la primera coincidencia del cliente principal.</td>
                         </tr>
                         <tr>
-                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-02</td>
-                            <td class="py-1.5 px-2">Motivo de préstamo</td>
-                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                            <td class="py-3 px-4 font-mono font-bold text-blue-700">VL-02</td>
+                            <td class="py-3 px-4 font-medium">Motivo de préstamo</td>
+                            <td class="py-3 px-4"><span class="bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-bold text-[10px]">Error</span></td>
+                            <td class="py-3 px-4">Comprueba presencia de etiqueta y valor de tipo de préstamo; ignora nombres y firmas.</td>
                         </tr>
                         <tr>
-                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-03</td>
-                            <td class="py-1.5 px-2">Número de Seguro Social (NSS)</td>
-                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                            <td class="py-3 px-4 font-mono font-bold text-blue-700">VL-03</td>
+                            <td class="py-3 px-4 font-medium">Seguro Social (NSS)</td>
+                            <td class="py-3 px-4"><span class="bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-bold text-[10px]">Error</span></td>
+                            <td class="py-3 px-4">Valida estructura de NSS, tolera valor genérico de planilla <code>0999-9999</code>.</td>
                         </tr>
                         <tr>
-                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-04</td>
-                            <td class="py-1.5 px-2">Referencias bancarias y personales</td>
-                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                            <td class="py-3 px-4 font-mono font-bold text-blue-700">VL-04</td>
+                            <td class="py-3 px-4 font-medium">Referencias</td>
+                            <td class="py-3 px-4"><span class="bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-bold text-[10px]">Error</span></td>
+                            <td class="py-3 px-4">Busca de forma independiente referencias bancarias y personales. Reporta faltantes específicos.</td>
                         </tr>
                         <tr>
-                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-05</td>
-                            <td class="py-1.5 px-2">Posición / Cargo</td>
-                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                            <td class="py-3 px-4 font-mono font-bold text-blue-700">VL-05</td>
+                            <td class="py-3 px-4 font-medium">Posición / Cargo</td>
+                            <td class="py-3 px-4"><span class="bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-bold text-[10px]">Error</span></td>
+                            <td class="py-3 px-4">Aísla el cargo real de la tabla de datos laborales. Excluye clasificaciones como "Gobierno/Privado".</td>
                         </tr>
                         <tr>
-                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-06</td>
-                            <td class="py-1.5 px-2">Rango salarial</td>
-                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                            <td class="py-3 px-4 font-mono font-bold text-blue-700">VL-06</td>
+                            <td class="py-3 px-4 font-medium">Sueldo / Rango Salarial</td>
+                            <td class="py-3 px-4"><span class="bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-bold text-[10px]">Error</span></td>
+                            <td class="py-3 px-4">Extrae rangos salariales explícitos o montos sueltos >= 100.00. Prioriza formato rango.</td>
                         </tr>
                         <tr>
-                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-07</td>
-                            <td class="py-1.5 px-2">Lugar de nacimiento</td>
-                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                            <td class="py-3 px-4 font-mono font-bold text-blue-700">VL-07</td>
+                            <td class="py-3 px-4 font-medium">Lugar de nacimiento</td>
+                            <td class="py-3 px-4"><span class="bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-bold text-[10px]">Error</span></td>
+                            <td class="py-3 px-4">Busca y valida coincidencia contra el catálogo oficial de provincias y comarcas de Panamá.</td>
                         </tr>
                         <tr>
-                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-08</td>
-                            <td class="py-1.5 px-2">Efectividades en órdenes</td>
-                            <td class="text-center"><span class="badge badge-warn">Aviso</span></td>
+                            <td class="py-3 px-4 font-mono font-bold text-blue-700">VL-08</td>
+                            <td class="py-3 px-4 font-medium">Efectividades</td>
+                            <td class="py-3 px-4"><span class="bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded font-bold text-[10px]">Aviso</span></td>
+                            <td class="py-3 px-4">Confirma la presencia física del campo para que el oficial valide manualmente que no esté vencido.</td>
                         </tr>
                         <tr>
-                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-09</td>
-                            <td class="py-1.5 px-2">Firma en cotización (páginas YOLO)</td>
-                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                            <td class="py-3 px-4 font-mono font-bold text-blue-700">VL-09</td>
+                            <td class="py-3 px-4 font-medium">Firma en cotización</td>
+                            <td class="py-3 px-4"><span class="bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-bold text-[10px]">Error</span></td>
+                            <td class="py-3 px-4">Si se detecta cotización en el expediente, valida que exista al menos una firma del oficial autorizada.</td>
                         </tr>
                         <tr>
-                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-10</td>
-                            <td class="py-1.5 px-2">Número de planilla</td>
-                            <td class="text-center"><span class="badge badge-error">Error</span></td>
+                            <td class="py-3 px-4 font-mono font-bold text-blue-700">VL-10</td>
+                            <td class="py-3 px-4 font-medium">Número de planilla</td>
+                            <td class="py-3 px-4"><span class="bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-bold text-[10px]">Error</span></td>
+                            <td class="py-3 px-4">Identifica números de nómina (ej. P0800013010 o 8-21-06-0-01979). Excluye cédulas duplicadas.</td>
                         </tr>
                         <tr>
-                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-11</td>
-                            <td class="py-1.5 px-2">Longitud de dirección (≤120 chars)</td>
-                            <td class="text-center"><span class="badge badge-warn">Aviso</span></td>
+                            <td class="py-3 px-4 font-mono font-bold text-blue-700">VL-11</td>
+                            <td class="py-3 px-4 font-medium">Longitud de dirección</td>
+                            <td class="py-3 px-4"><span class="bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded font-bold text-[10px]">Aviso</span></td>
+                            <td class="py-3 px-4">Verifica que la dirección residencial no exceda 120 caracteres. Exige un mínimo de 10 caracteres.</td>
                         </tr>
                         <tr>
-                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-12</td>
-                            <td class="py-1.5 px-2">Info de cónyuge / Estado civil</td>
-                            <td class="text-center"><span class="badge badge-warn">Aviso</span></td>
+                            <td class="py-3 px-4 font-mono font-bold text-blue-700">VL-12</td>
+                            <td class="py-3 px-4 font-medium">Información de cónyuge</td>
+                            <td class="py-3 px-4"><span class="bg-red-100 text-red-800 px-1.5 py-0.5 rounded font-bold text-[10px]">Error</span></td>
+                            <td class="py-3 px-4">Si el estado civil es Casado/Unido, exige datos del cónyuge. Filtra textos dummy del OCR.</td>
                         </tr>
                         <tr>
-                            <td class="py-1.5 px-2 font-mono text-blue-700">VL-13</td>
-                            <td class="py-1.5 px-2">Proximidad huella-firma</td>
-                            <td class="text-center"><span class="badge badge-warn">Aviso</span></td>
+                            <td class="py-3 px-4 font-mono font-bold text-blue-700">VL-13</td>
+                            <td class="py-3 px-4 font-medium">Proximidad huella-firma</td>
+                            <td class="py-3 px-4"><span class="bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded font-bold text-[10px]">Aviso</span></td>
+                            <td class="py-3 px-4">Mide distancia en px entre centros de Bboxes de YOLOv8. Falla si faltan firmas o huellas.</td>
                         </tr>
                     </tbody>
                 </table>
             </div>
+        </section>
 
-            <!-- Arquitectura + Modelos -->
-            <div class="space-y-4">
-
-                <div class="bg-white rounded-xl shadow-lg p-6">
-                    <h2 class="text-base font-semibold text-slate-700 mb-3">Componentes del sistema</h2>
-                    <div class="space-y-3 text-sm">
-                        <div class="flex items-start gap-3">
-                            <span class="text-2xl">🐳</span>
-                            <div>
-                                <p class="font-semibold text-slate-800">ocr_engine (Docker)</p>
-                                <p class="text-slate-500">FastAPI · Ollama LLM · YOLO · 4 workers (Hilos
-                                    asíncronos)<br />Puerto 8000 (GPU Acelerada Recomendada)</p>
-                            </div>
-                        </div>
-                        <div class="flex items-start gap-3">
-                            <span class="text-2xl">🟣</span>
-                            <div>
-                                <p class="font-semibold text-slate-800">Odoo 16 (odoo_web)</p>
-                                <p class="text-slate-500">Addon <code
-                                        class="bg-slate-100 px-1 rounded">project_ocr_validation</code><br />Modelos:
-                                    <code class="bg-slate-100 px-1 rounded">project.loan.document</code> · <code
-                                        class="bg-slate-100 px-1 rounded">project.ocr.document</code>
-                                </p>
-                            </div>
-                        </div>
-                        <div class="flex items-start gap-3">
-                            <span class="text-2xl">📡</span>
-                            <div>
-                                <p class="font-semibold text-slate-800">Endpoints</p>
-                                <p class="text-slate-500"><code
-                                        class="bg-slate-100 px-1 rounded">POST /api/v1/validate-loan</code> — Préstamos
-                                    (13 VL)<br /><code class="bg-slate-100 px-1 rounded">POST /api/v1/analyze-pdf</code>
-                                    — OCR genérico</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="bg-white rounded-xl shadow-lg p-6">
-                    <h2 class="text-base font-semibold text-slate-700 mb-3">Estados de cumplimiento</h2>
-                    <div class="space-y-2 text-sm">
-                        <div class="flex items-center gap-3 p-2 bg-green-50 rounded-lg border border-green-200">
-                            <span class="text-xl">✅</span>
-                            <div>
-                                <p class="font-semibold text-green-800">Conforme</p>
-                                <p class="text-green-600 text-xs">0 errores críticos</p>
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-3 p-2 bg-yellow-50 rounded-lg border border-yellow-200">
-                            <span class="text-xl">⚠️</span>
-                            <div>
-                                <p class="font-semibold text-yellow-800">Observado — Revisión Manual</p>
-                                <p class="text-yellow-600 text-xs">Hay errores críticos o avisos; requiere revisión del
-                                    oficial</p>
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-3 p-2 bg-red-50 rounded-lg border border-red-200">
-                            <span class="text-xl">❌</span>
-                            <div>
-                                <p class="font-semibold text-red-800">No Conforme — Devolver</p>
-                                <p class="text-red-600 text-xs">Múltiples errores críticos; expediente incompleto</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
+        <!-- Section 4: Bitácora de Cambios -->
+        <section id="bitacora-cambios" class="space-y-6">
+            <div class="border-b border-slate-200 pb-2">
+                <h2 class="text-lg font-bold text-slate-950 font-sans flex items-center gap-2">
+                    <span>4.</span> Registro de Cambios y Modificaciones (21/06/2026)
+                </h2>
+                <p class="text-slate-600 text-xs">Bitácora cronológica de adecuaciones de infraestructura, optimizaciones del prompt y refactorización de código ejecutado durante el día de hoy.</p>
             </div>
-        </div>
 
-        <!-- Footer -->
-        <p class="text-center text-slate-400 text-xs pb-4">Grupo Saleta · v16.0.1.3.0 · 16 de marzo de 2026</p>
+            <!-- Registro Técnico List -->
+            <div class="space-y-6">
+                <!-- Modificacion 1 -->
+                <div class="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+                    <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <span class="font-bold text-slate-900 text-sm">Configuración de GPU Dedicada y Corrección de Errores de API</span>
+                        <span class="text-xs font-mono text-slate-500">21/06/2026</span>
+                    </div>
+                    <p class="text-xs text-slate-700 leading-normal">
+                        <strong>Descripción del problema:</strong> Ocurrencia del error <code class="bg-slate-100 text-red-700 px-1 py-0.5 rounded">400 Client Error: Bad Request</code> de forma constante en el endpoint de chat de Ollama. Cuelgues sistemáticos del contenedor local por agotamiento de memoria RAM/CPU al procesar de forma secuencial múltiples imágenes de alta resolución provenientes de PDFs de gran tamaño.
+                    </p>
+                    <p class="text-xs text-slate-700 leading-normal">
+                        <strong>Acciones técnicas ejecutadas:</strong>
+                    </p>
+                    <ul class="list-disc pl-5 text-xs text-slate-600 space-y-1">
+                        <li>Migración del motor de inferencia al servidor remoto <code>172.17.0.33</code> provisto de una GPU Nvidia RTX 5080 (16GB VRAM).</li>
+                        <li>Edición del Docker Compose para integrar las reservas del driver <code>nvidia</code> y la API de GPU en los contenedores <code>ollama</code> y <code>ocr_engine</code>.</li>
+                        <li>Parcheo de dependencias de python en la inicialización: se removió el cliente de OpenAI debido a conflictos de versiones con httpx y se implementaron peticiones JSON planas usando la librería nativa <code>requests</code> de Python.</li>
+                    </ul>
+                </div>
+
+                <!-- Modificacion 2 -->
+                <div class="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+                    <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <span class="font-bold text-slate-900 text-sm">Habilitación de Procesamiento Concurrente (ThreadPoolExecutor)</span>
+                        <span class="text-xs font-mono text-slate-500">21/06/2026</span>
+                    </div>
+                    <p class="text-xs text-slate-700 leading-normal">
+                        <strong>Descripción del problema:</strong> Latencia excesiva en el procesamiento de expedientes (más de 5 minutos para un PDF de 33 páginas), lo cual superaba los límites de tiempo de transacción (timeouts) configurados en Odoo y bloqueaba al oficial de crédito.
+                    </p>
+                    <p class="text-xs text-slate-700 leading-normal">
+                        <strong>Acciones técnicas ejecutadas:</strong>
+                    </p>
+                    <ul class="list-disc pl-5 text-xs text-slate-600 space-y-1">
+                        <li>Inyección de la variable de entorno <code>OLLAMA_NUM_PARALLEL=4</code> para habilitar la cola de procesamiento en paralelo interna en Ollama sin encolar las peticiones.</li>
+                        <li>Refactorización de `services.py`: Sustitución del ciclo imperativo <code>for</code> por un pool de hilos usando <code>ThreadPoolExecutor(max_workers=4)</code>, mandando a analizar en paralelo las páginas del documento.</li>
+                        <li>Control robusto de excepciones por hilo para asegurar que el fallo aislado de análisis de una página no interrumpa la extracción de texto del resto del expediente.</li>
+                    </ul>
+                    <p class="text-xs text-slate-700 leading-normal">
+                        <strong>Resultado medido:</strong> El análisis del PDF de prueba de 33 páginas bajó de 300 segundos a **54 segundos** en total.
+                    </p>
+                </div>
+
+                <!-- Modificacion 3 -->
+                <div class="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+                    <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <span class="font-bold text-slate-900 text-sm">Restricciones de Contexto en Prompts y Mitigación de Alucinaciones</span>
+                        <span class="text-xs font-mono text-slate-500">21/06/2026</span>
+                    </div>
+                    <p class="text-xs text-slate-700 leading-normal">
+                        <strong>Descripción del problema:</strong> Ollama extraía datos de nombres de referencias, firmas manuscritas o nombres de cónyuges descritos en copias de cédula secundarias o reportes APC y los asignaba de forma incorrecta como la Dirección Residencial o los datos principales del cónyuge, generando falsos errores de validación.
+                    </p>
+                    <p class="text-xs text-slate-700 leading-normal">
+                        <strong>Acciones técnicas ejecutadas:</strong>
+                    </p>
+                    <ul class="list-disc pl-5 text-xs text-slate-600 space-y-1">
+                        <li>Se actualizó el System Prompt en `services.py` definiendo **reglas explícitas de exclusión por página**: se le instruye formalmente al modelo que la Dirección Residencial solo debe extraerse de la página con la cabecera `DATOS RESIDENCIALES`, devolviendo obligatoriamente `"NO ENCONTRADO"` en cualquier otra página del PDF.</li>
+                        <li>Se aplicó la misma regla restrictiva al cónyuge, anclando su extracción a la sección formal de `INFORMACIÓN DEL CÓNYUGE` de la página de solicitud principal.</li>
+                        <li>Afinamiento del prompt de cónyuge para obligar a extraer la cédula escrita a mano en la tabla (`8-724-379`), mitigando el error de buscar el documento físico de cédula.</li>
+                    </ul>
+                </div>
+
+                <!-- Modificacion 4 -->
+                <div class="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+                    <div class="flex items-center justify-between border-b border-slate-100 pb-2">
+                        <span class="font-bold text-slate-900 text-sm">Refactorización y Limpieza de Algoritmos en validators.py</span>
+                        <span class="text-xs font-mono text-slate-500">21/06/2026</span>
+                    </div>
+                    <p class="text-xs text-slate-700 leading-normal">
+                        <strong>Descripción del problema:</strong> El parser de Python carecía de mecanismos para sanear las respuestas del LLM, reportando como válidos textos dummy del OCR o confundiendo cédulas con planillas y tipos de cliente con posiciones.
+                    </p>
+                    <p class="text-xs text-slate-700 leading-normal">
+                        <strong>Acciones técnicas ejecutadas:</strong>
+                    </p>
+                    <ul class="list-disc pl-5 text-xs text-slate-600 space-y-1">
+                        <li><strong>Función is_dummy_value:</strong> Se implementó un algoritmo centralizado de filtrado en el backend que identifica y anula respuestas dummy (ej. `"NOT A PICTURED DOCUMENT"`, `"NO ENCONTRADO"`, `"NINGUNO"`, `"N/A"`).</li>
+                        <li><strong>Normalización OCR:</strong> Creación de `normalize_ocr_text` para unificar minúsculas, remover acentos y corregir errores tipográficos conocidos en la salida del OCR (ej. unificar `0posicion` a `oposicion`).</li>
+                        <li><strong>Ajuste VL-01 (Cédula):</strong> Se limita el reporte a la primera cédula encontrada para evitar incluir cédulas secundarias detectadas en copias adjuntas.</li>
+                        <li><strong>Ajuste VL-05 (Cargo):</strong> Se limpiaron prefijos de cliente ("Gobierno", "Privado", "Independiente") para capturar la ocupación concreta.</li>
+                        <li><strong>Ajuste VL-10 (Planilla):</strong> Soporte de planilla de colaboradores gubernamentales (`8-21-06-0-01979`) y exclusión explícita de cédulas dentro del array de candidatos de planilla.</li>
+                        <li><strong>Ajuste VL-11 (Dirección):</strong> Se configuró un límite de longitud mínima de 10 caracteres para evadir falsos positivos cortos como nombres o firmas de páginas secundarias.</li>
+                        <li><strong>Ajuste VL-13 (Proximidad):</strong> Se reestructuró la evaluación de YOLO: si no se detectan firmas o huellas, la validación falla explícitamente (`passed=False`) reportando la alerta con severidad "Aviso", en lugar de retornar True.</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
     </div>
 
+    <!-- Footer -->
+    <div class="bg-white border-t border-slate-200 py-8 text-center text-slate-500 text-xs mt-12">
+        <div class="max-w-5xl mx-auto px-6">
+            <p>Grupo Saleta · Departamento de Tecnología e Inteligencia Artificial</p>
+            <p class="text-[10px] text-slate-450 mt-1">Uso exclusivo para la documentación técnica de integración del ERP Odoo 16</p>
+        </div>
+    </div>
+
+    <!-- Scripts (Mermaid e Interactividad) -->
     <script type="module">
         import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
         mermaid.initialize({
             startOnLoad: true,
-            themeVariables: { fontSize: '15px' }
+            theme: 'default',
+            themeVariables: {
+                fontFamily: 'monospace',
+                fontSize: '12px',
+                textColor: '#0f172a',
+                lineColor: '#475569'
+            }
         });
+    </script>
+
+    <script>
+        // Diccionario dinámico de datos de las reglas VL para la tarjeta interactiva
+        const rulesData = {
+            'VL-01': {
+                icon: '🪪',
+                title: 'Cédula / Datos del cliente',
+                desc: 'Valida que el número de cédula esté presente en el texto del expediente de crédito y que tenga un formato válido de la República de Panamá (ej. 8-733-1006 o PE-12-345).',
+                adjustments: [
+                    '<strong>Filtrado de Duplicados:</strong> Se modificó el algoritmo para compilar y reportar únicamente la primera cédula encontrada, correspondiente al cliente principal. Evita contaminar la validación con cédulas de cónyuges, referencias o fiadores en la misma línea.',
+                    '<strong>Soporte Especial:</strong> Ampliado el regex para capturar correctamente cédulas que inician con provincias de un solo dígito o prefijos de extranjero.'
+                ],
+                logic: "r'\\b(?:(?:pe|n|e|pi|av)-\\d{1,4}-\\d{1,6}|(?:[1-9]|1[0-3])-\\d{3,4}-\\d{3,6})\\b'"
+            },
+            'VL-02': {
+                icon: '🎯',
+                title: 'Motivo de préstamo',
+                desc: 'Valida que la hoja de datos contenga explícitamente el motivo del préstamo (ej. "PRESTAMOS CIES", "PRESTAMO POR VENTANILLA"). Evita falsos positivos con encabezados de tabla.',
+                adjustments: [
+                    '<strong>Filtro de Falsos Positivos:</strong> Se agregó exclusión de palabras clave como "oficial", "firma" o "nombre" en el valor extraído.',
+                    '<strong>Soporte de Páginas:</strong> Evita que reportes de "NO ENCONTRADO" en páginas secundarias invaliden el motivo detectado en la página de solicitud principal.'
+                ],
+                logic: "r'(?i)\\b(?:motivo\\s*(?:de\\s*pr[eé]stamo)?|tipo\\s+de\\s+cr[eé]dito)\\s*[:\\-=]?\\s*(.{4,80}?)'"
+            },
+            'VL-03': {
+                icon: '🏥',
+                title: 'Número de seguro social (NSS)',
+                desc: 'Valida la presencia del Número de Seguro Social (NSS) en el expediente (clave para validar contra el CSS de Panamá).',
+                adjustments: [
+                    '<strong>Flexibilización del Formato:</strong> Se modificó la regla para aceptar el valor genérico de planilla "0999-9999" y no descartarlo, ya que es el asignado de manera estándar para nóminas en el talonario CSS.',
+                    '<strong>Diferenciación de Cédula:</strong> Permite que sea idéntico a la cédula en ciertos escenarios sin generar rechazo.'
+                ],
+                logic: "r'\\b([1-9A-Z][0-9A-Z]{0,3}(?:-[0-9A-Z]{2,6}){1,3})\\b'"
+            },
+            'VL-04': {
+                icon: '📞',
+                title: 'Referencias bancarias y personales',
+                desc: 'Verifica la presencia tanto de referencias bancarias como personales escritas en la solicitud.',
+                adjustments: [
+                    '<strong>Extracción Estructurada:</strong> Implementación de expresiones de búsqueda asistida mediante prompt para capturar los nombres de bancos y personas por separado.',
+                    '<strong>Evitación de Firmas:</strong> Filtra términos que contengan firmas o huellas en lugar de nombres de referencias reales.'
+                ],
+                logic: 'Validación por presencia de listas separadas por comas con filtrado de dummies'
+            },
+            'VL-05': {
+                icon: '💼',
+                title: 'Posición / Cargo',
+                desc: 'Busca y valida la posición o cargo del cliente (ej. "Educador", "Oficinista") en la sección de datos laborales.',
+                adjustments: [
+                    '<strong>Limpieza de Tipo de Cliente:</strong> Corrección del error que asignaba el tipo de cliente ("Gobierno", "Privado") como el cargo. El backend ahora elimina estos prefijos automáticamente.',
+                    '<strong>Filtro Numérico:</strong> Evita alucinaciones numéricas de ID de cargo como cargos válidos.'
+                ],
+                logic: "r'(?i)(?:cargo|posici[oó]n|ocupaci[oó]n|profesi[oó]n)\\s*[:\\-]+\\s*(.{3,60}?)'"
+            },
+            'VL-06': {
+                icon: '💰',
+                title: 'Rango salarial / Monto',
+                desc: 'Verifica que exista un salario o sueldo numérico válido en el documento (monto >= 100.00).',
+                adjustments: [
+                    '<strong>Prioridad de Rango:</strong> El parser prefiere y prioriza rangos explícitos (ej. "1200.01 - 1500.00") frente a montos sueltos.',
+                    '<strong>Contexto Ampliado:</strong> Se amplió la ventana de búsqueda contextual a 120 caracteres en texto crudo para localizar montos cerca del label "salario".'
+                ],
+                logic: "r'(?:B/\\.?\\s*|\\$\\s*)?(?<![A-Za-z0-9\\-])(\\d{1,3}(?:[.,]\\d{3})*(?:[.,]\\d{1,2})?|...)'"
+            },
+            'VL-07': {
+                icon: '📍',
+                title: 'Lugar de nacimiento',
+                desc: 'Valida que el lugar de nacimiento contenga una provincia panameña válida.',
+                adjustments: [
+                    '<strong>Regex de Provincias:</strong> Se integró un listado exhaustivo de provincias y comarcas panameñas (ej: Los Santos, Chiriquí, Bocas del Toro, Panamá Oeste).',
+                    '<strong>Pais Opcional:</strong> Si no se detecta el país, asume por defecto Panamá si la provincia coincide.'
+                ],
+                logic: "r'(?i)\\b(?:Panam[aá]|Chiriqu[ií]|Cocl[eé]|Col[oó]n|Dari[eé]n|Herrera|Los\\s+Santos|Veraguas|...)\\b'"
+            },
+            'VL-08': {
+                icon: '⏳',
+                title: 'Efectividades en órdenes',
+                desc: 'Verifica la presencia de fechas de efectividad en los documentos de orden de descuento.',
+                adjustments: [
+                    '<strong>Aviso de Revisión Manual:</strong> Configurado con severidad "Aviso" para recordar al oficial verificar que la fecha de efectividad no se encuentre expirada al momento del desembolso.'
+                ],
+                logic: "r'(?i)\\befectividad\\b'"
+            },
+            'VL-09': {
+                icon: '✍️',
+                title: 'Firma en cotización',
+                desc: 'Valida visualmente mediante YOLOv8 o instrucciones del LLM si la cotización adjunta tiene la firma del oficial.',
+                adjustments: [
+                    '<strong>Integración YOLO:</strong> Se conecta con los bounding boxes de firmas de YOLOv8. Reporta las páginas exactas donde se detectaron firmas.',
+                    '<strong>Omisión Inteligente:</strong> Si no hay cotización en el PDF, la regla pasa automáticamente indicando que se omitió.'
+                ],
+                logic: 'Detección visual por YOLOv8 + mapeo de páginas'
+            },
+            'VL-10': {
+                icon: '📊',
+                title: 'Número de planilla',
+                desc: 'Valida la existencia del número de planilla del colaborador (clave para la orden de descuento F1-b).',
+                adjustments: [
+                    '<strong>Exclusión de Cédulas:</strong> Se implementó un filtro cruzado para descartar números de cédula que el LLM confunde con números de planilla.',
+                    '<strong>Soporte de Formato Gobierno:</strong> Acepta formatos gubernamentales complejos de nómina (ej. 8-21-06-0-01979) y el formato simple (08-3722).'
+                ],
+                logic: "r'\\bP(\\d{5,12})\\b' | r'N\\.?PR(\\d{2,4}[-]\\d{2,6})'"
+            },
+            'VL-11': {
+                icon: '🏠',
+                title: 'Longitud de dirección',
+                desc: 'Valida que la dirección residencial sea detallada y no supere los 120 caracteres para evitar truncamientos en Odoo.',
+                adjustments: [
+                    '<strong>Regla de Exclusión de Página:</strong> El LLM solo extrae la dirección de la página que contiene "DATOS RESIDENCIALES". En cualquier otra devuelve "NO ENCONTRADO". Esto elimina alucinaciones con nombres de firmas.',
+                    '<strong>Longitud Mínima (10 chars):</strong> Descarta automáticamente palabras alucinadas sueltas (como "keyra") fijando un mínimo de 10 caracteres.'
+                ],
+                logic: 'Filtro por longitud >= 10 y <= 120 caracteres sobre página específica'
+            },
+            'VL-12': {
+                icon: '👥',
+                title: 'Información de cónyuge',
+                desc: 'Si el cliente declara estado civil Casado o Unido, valida que estén completos los datos del cónyuge (Nombre, Cédula, Labora y Empresa).',
+                adjustments: [
+                    '<strong>Regla de Exclusión de Página:</strong> La información se extrae *únicamente* de la sección de cónyuge en la página de solicitud principal.',
+                    '<strong>Limpieza is_dummy_value:</strong> Se implementó la exclusión automática de cadenas dummy ("NOT A PICTURED DOCUMENT") mediante la función global de saneamiento.',
+                    '<strong>Cédula Escrita:</strong> El prompt de Ollama ahora busca específicamente la cédula escrita en la tabla, no el documento físico.'
+                ],
+                logic: 'Evaluación condicional del estado civil con anclajes en ventana de texto'
+            },
+            'VL-13': {
+                icon: '📐',
+                title: 'Proximidad huella-firma',
+                desc: 'Valida mediante geometría YOLOv8 que la huella dactilar esté próxima a la firma manuscrita en las páginas correspondientes.',
+                adjustments: [
+                    '<strong>Cambio de Comportamiento Crítico:</strong> Si no se detectan firmas o huellas, la validación ahora falla con severidad "Aviso" para alertar al oficial sobre el documento incompleto, en lugar de pasar con check verde.'
+                ],
+                logic: 'Cálculo de distancia euclidiana entre centros de BBoxes (máximo 600px @ 200 DPI)'
+            }
+        };
+
+        // Función para cambiar de regla visualmente
+        window.selectRule = function(ruleCode) {
+            document.querySelectorAll('.rule-row').forEach(row => {
+                row.classList.remove('bg-indigo-50/50', 'border-l-2', 'border-indigo-600');
+            });
+
+            const activeRow = document.getElementById('row-' + ruleCode);
+            if (activeRow) {
+                activeRow.classList.add('bg-indigo-50/50', 'border-l-2', 'border-indigo-600');
+            }
+
+            const data = rulesData[ruleCode];
+            if (data) {
+                document.getElementById('detail-code').innerText = ruleCode;
+                document.getElementById('detail-title').innerText = data.title;
+                document.getElementById('detail-desc').innerText = data.desc;
+                document.getElementById('detail-logic').innerText = data.logic;
+
+                const adjList = document.getElementById('detail-adjustments');
+                adjList.innerHTML = '';
+                data.adjustments.forEach(adj => {
+                    const li = document.createElement('li');
+                    li.innerHTML = adj;
+                    adjList.appendChild(li);
+                });
+            }
+        };
+
+        // Scroll suave a secciones
+        window.scrollToId = function(id) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth' });
+            }
+        };
     </script>
 </body>
 

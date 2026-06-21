@@ -45,7 +45,7 @@ services:
       - odoo_net
 
   # ─────────────────────────────────────────────
-  # Ollama Local - LLM para OCR en CPU
+  # Ollama Local - LLM para OCR en GPU
   # ─────────────────────────────────────────────
   ollama:
     image: ollama/ollama:latest
@@ -57,6 +57,15 @@ services:
       - ./ollama_data:/root/.ollama
     networks:
       - odoo_net
+    environment:
+      - OLLAMA_NUM_PARALLEL=4
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   # ─────────────────────────────────────────────
   # Microservicio OCR + YOLO (FastAPI)
@@ -74,7 +83,14 @@ services:
     environment:
       - LLM_API_KEY=ollama
       - LLM_BASE_URL=http://ollama:11434/v1
-      - LLM_MODEL_NAME=minicpm-v
+      - LLM_MODEL_NAME=qwen2.5vl-8k
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     volumes:
       - ./ocr_microservice/models_ml:/app/models_ml
       # Bind mounts de código fuente para hot-reload (evita rebuild en desarrollo)
