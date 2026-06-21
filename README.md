@@ -1,27 +1,27 @@
 # project_ocr_validation — Módulo Odoo 16
 
 Módulo de **validación documental automatizada** para expedientes de préstamos Cíes, Ons y Ventanilla.  
-Integra un microservicio Python (FastAPI + Ollama LLM) con Odoo para analizar PDFs y aplicar 13 reglas de cumplimiento documental.
+Integra un microservicio Python (FastAPI + Ollama con GPU remota) con Odoo para analizar PDFs y aplicar 13 reglas de cumplimiento documental.
 
 > **Nota para IT:** Este módulo es autocontenido y funcional tal cual, pero está pensado para que el equipo técnico lo **herede** en su propio addon (`_inherit`) y lo adapte al modelo de negocio (carpeta de crédito, project.task, account.move, etc.) sin modificar este módulo base.
 
 ---
 
-## Arquitectura general
+## Arquitectura general y Flujo en GPU
 
 ```
-Odoo (addon)                           Microservicio (Docker)
-┌──────────────────────────────┐      ┌──────────────────────────────┐
-│  LoanDocument                │      │  FastAPI (Background Thread) │
-│  (project.loan.document)     │ HTTP │  POST /api/v1/validate-loan  │
-│  Llamada vía Cron Asíncrono  │ ───► │                              │
-│                              │      │  Ollama (MiniCPM) →  OCR     │
-│  ValidationLine              │ ◄─── │  YOLO (Opcional)→  visual  │
-│  (×13 reglas VL)             │ JSON │  validators.py    →  13 VLs  │
-└──────────────────────────────┘      └──────────────────────────────┘
+Odoo (addon)                               FastAPI OCR Engine (172.17.0.33)
+┌──────────────────────────────┐          ┌──────────────────────────────────┐
+│  LoanDocument                │          │  FastAPI (ThreadPoolExecutor)    │
+│  (project.loan.document)     │  HTTP    │  POST /api/v1/validate-loan      │
+│  Llamada vía Cron Asíncrono  │ ───────► │                                  │
+│                              │          │  Ollama (Qwen2.5-VL) → Inferencia│
+│  ValidationLine              │ ◄─────── │  YOLOv8              → Visual    │
+│  (×13 reglas VL)             │   JSON   │  validators.py       → Eval 13VL │
+└──────────────────────────────┘          └──────────────────────────────────┘
 ```
 
-El addon también incluye `project.ocr.document` — modelo genérico de análisis OCR sin reglas de negocio, pensado para tipos de documento distintos a préstamos.
+La conversión de PDF a imágenes se realiza a **200 DPI** para garantizar legibilidad. Las páginas del expediente se procesan de forma concurrente mediante un pool de hilos (`ThreadPoolExecutor(max_workers=4)`) consumiendo el motor Ollama en el servidor GPU dedicado (`172.17.0.33` con RTX 5080) con paralelismo activo (`OLLAMA_NUM_PARALLEL=4`).
 
 ---
 
@@ -88,23 +88,23 @@ Modelo base para análisis OCR sin reglas de negocio específicas.
 
 ## Reglas de validación (VL-01 a VL-13)
 
-Aplicadas sobre el texto OCR del expediente:
+Evaluación lógica de cumplimiento documental sobre la salida del OCR:
 
-| Código | Nombre | Severidad | Qué verifica |
+| Código | Nombre | Severidad | Criterio de Aprobación y Ajustes Recientes |
 |---|---|---|---|
-| VL-01 | Cédula / Datos del cliente | Error | Cédula panameña con formato válido (`N-NNNN-NNNN`). |
-| VL-02 | Motivo de préstamo | Error | Campo "Motivo" presente y con valor legible. |
-| VL-03 | Número de Seguro Social | Error | NSS presente. Busca labels `"No. Seguro Social"`, `"SEG.SOCIAL"`, etc. |
-| VL-04 | Referencias bancarias y personales | Error | Ambas secciones presentes en el formulario. |
-| VL-05 | Posición / Cargo | Error | Cargo del cliente detectado (para cotejo con carta de trabajo). |
-| VL-06 | Rango salarial | Error | Monto o rango salarial presente en el formulario. |
-| VL-07 | Lugar de nacimiento | Error | Provincia + País detectados. |
-| VL-08 | Efectividades en órdenes de descuento | Warning | Campo de efectividad presente (puede no aplica según tipo). |
-| VL-09 | Firma en cotización | Error | Al menos una firma detectada en el expediente. |
-| VL-10 | Número de planilla | Error | Planilla presente para cotejo. |
-| VL-11 | Longitud de dirección | Warning | Dirección residencial ≤ 120 caracteres. |
-| VL-12 | Información de cónyuge | Warning | Si es casado/unido: verifica sección cónyuge. Si es soltero: `N/A`. |
-| VL-13 | Proximidad huella-firma | Warning | Huella y firma no deben estar demasiado separadas en la página. |
+| **VL-01** | Cédula / Datos del cliente | Error | Busca un formato de cédula panameña. Retorna únicamente la primera cédula del cliente principal (evita duplicados con fiadores o cónyuges). |
+| **VL-02** | Motivo de préstamo | Error | Comprueba la presencia de la etiqueta "Motivo" y que posea valor escrito; filtra encabezados de tabla o firmas. |
+| **VL-03** | Número de Seguro Social (NSS) | Error | Comprueba formato válido de NSS. Se permite y acepta el valor de nómina `0999-9999`. |
+| **VL-04** | Referencias personales/bancarias | Error | Evalúa y reporta por separado la presencia de referencias bancarias y personales con sus respectivos campos. |
+| **VL-05** | Posición / Cargo | Error | Aísla la ocupación laboral real del cliente en los datos laborales; remueve automáticamente prefijos y clasificaciones (ej: "Gobierno"). |
+| **VL-06** | Rango salarial / Sueldo | Error | Busca montos o rangos salariales >= 100.00. Prioriza rangos explícitos (ej. "1200.01 - 1500.00"). |
+| **VL-07** | Lugar de nacimiento | Error | Valida que contenga una provincia o comarca panameña oficial (ej: Chiriquí, Veraguas, Herrera, Los Santos). |
+| **VL-08** | Efectividades en órdenes | Warning | Alerta de validación manual al oficial para confirmar que las efectividades encontradas no estén vencidas. |
+| **VL-09** | Firma en cotización | Error | Si el expediente contiene cotización, verifica mediante YOLOv8 que posea al menos una firma manuscrita. |
+| **VL-10** | Número de planilla | Error | Identifica formatos de planilla (ej: `P0800013010` o `8-21-06-0-01979`). Excluye cédulas de identidad del cliente. |
+| **VL-11** | Longitud de dirección | Warning | Extrae la dirección *únicamente* de la página de solicitud principal. Requiere un mínimo de 10 caracteres (evita alucinaciones cortas) y un máximo recomendado de 120. |
+| **VL-12** | Información de cónyuge | Error | Exclusivo para casados/unidos. Extrae nombre, cédula de formulario y datos laborales de la sección de cónyuge. Aplica descarte automático de textos dummy (`is_dummy_value`). |
+| **VL-13** | Proximidad huella-firma | Warning | Mide la distancia en px entre firmas y huellas con YOLOv8. Si faltan firmas o huellas, la regla falla con severidad **Aviso** y detalla el elemento ausente. |
 
 ---
 
@@ -144,7 +144,6 @@ from odoo import api, fields, models
 class MiSolicitudCredito(models.Model):
     _inherit = "mi.solicitud.credito"   # su modelo existente
 
-    # Agregar el PDF y los resultados de validación
     pdf_file       = fields.Binary("Expediente PDF", attachment=True)
     pdf_filename   = fields.Char()
     validation_ids = fields.One2many(
@@ -157,7 +156,6 @@ class MiSolicitudCredito(models.Model):
     ], readonly=True)
 
     def action_validate(self):
-        # Crear un LoanDocument temporal y programar la validación vía Cron Asíncrono
         loan = self.env["project.loan.document"].create({
             "name": self.name,
             "loan_type": "cies",
@@ -165,74 +163,54 @@ class MiSolicitudCredito(models.Model):
             "pdf_filename": self.pdf_filename,
         })
         loan.action_start_ocr_validation()
-        # NOTA: En este nuevo modelo asíncrono, los resultados se volcarán al
-        # registro propio una vez el CRON background en Odoo termine. Mapear después.
-```
-
-### Opción C — Solo mostrar resultados en vista existente (heredar vista)
-
-```xml
-<!-- En su addon: views/mi_vista_heredada.xml -->
-<record id="view_mi_solicitud_form_ocr" model="ir.ui.view">
-    <field name="name">mi.solicitud.form.ocr</field>
-    <field name="model">mi.solicitud.credito</field>
-    <field name="inherit_id" ref="mi_addon.view_mi_solicitud_form"/>
-    <field name="arch" type="xml">
-        <xpath expr="//notebook" position="inside">
-            <page string="Validación OCR" name="ocr_validation">
-                <field name="loan_compliance" widget="badge"/>
-                <field name="validation_ids">
-                    <tree decoration-danger="not passed and severity == 'error'"
-                          decoration-warning="not passed and severity == 'warning'">
-                        <field name="status_icon"/>
-                        <field name="code"/>
-                        <field name="label"/>
-                        <field name="detail"/>
-                    </tree>
-                </field>
-            </page>
-        </xpath>
-    </field>
-</record>
 ```
 
 ---
 
 ## Variables de entorno y configuración
 
-| Variable / Constante | Dónde | Valor por defecto | Descripción |
+| Variable | Dónde | Valor por defecto | Descripción |
 |---|---|---|---|
 | `LOAN_VALIDATE_URL` | `loan_document.py` | `http://ocr_engine:8000/api/v1/validate-loan` | Endpoint del microservicio para préstamos. |
 | `OCR_ENGINE_URL` | `ocr_document_analysis.py` | `http://ocr_engine:8000/api/v1/analyze-pdf` | Endpoint genérico para FastOCR. |
 | Timeout Web | `loan_document.py` | `3` segundos | Tiempo de disparo para encolar la tarea CRON de Validación de Expediente. |
 
-> Para producción fuera de Docker, cambiar las URLs a la IP/hostname real del servidor del microservicio **NVIDIA GPU**.
-
 ---
 
-## Requisitos
+## Requisitos y Despliegue
 
 - **Odoo 16** (Community o Enterprise)
-- **Python 3.10+**
-- Microservicio OCR corriendo (ver `odoo_ocr_project/README` o `docker-compose.yml`)
-- Dependencias Odoo: `base`, `project`, `mail`
+- **Servidor Remoto GPU dedicado (172.17.0.33):**
+  - Drivers de Nvidia instalados (`nvidia-driver-535` o superior).
+  - `nvidia-container-toolkit` configurado para habilitar runtime GPU en Docker.
+  - Puertos expuestos: 8000 (FastAPI OCR Engine) y 11434 (Ollama, local bound).
 
 ---
 
-## Instalación rápida
+## Bitácora de Cambios e Hitos (21/06/2026)
 
-```bash
-# 1. Copiar el addon al directorio de addons de Odoo
-cp -r odoo_ocr_project/addons/project_ocr_validation /ruta/odoo/addons/
+### Configuración de GPU Dedicada y Corrección de Errores de API
+* **Problema:** Errores continuos `400 Client Error: Bad Request` en la API de chat de Ollama. Cuelgues en el contenedor local por falta de memoria RAM/CPU al procesar PDFs extensos de forma secuencial.
+* **Solución:** Migración del servicio de inferencia al host dedicado `172.17.0.33` provisto de una GPU Nvidia RTX 5080 (16GB VRAM). Configuración de Docker Compose reservando driver `nvidia` y recursos `gpu`. Sustitución de la SDK de OpenAI por consultas HTTP directas estructuradas vía la librería nativa `requests` de Python para anular conflictos de dependencias.
 
-# 2. Levantar el microservicio OCR
-cd odoo_ocr_project
-docker compose up -d
+### Habilitación de Procesamiento Concurrente (ThreadPoolExecutor)
+* **Problema:** Latencia excesiva en el análisis del expediente completo (más de 5 minutos por PDF), provocando timeouts en las peticiones HTTP desde Odoo.
+* **Solución:** Configuración de la variable de entorno `OLLAMA_NUM_PARALLEL=4` en Ollama. Refactorización de `services.py` integrando concurrencia paralela mediante `ThreadPoolExecutor(max_workers=4)` para renderizar y enviar las páginas simultáneamente.
+* **Resultado:** Reducción del tiempo de respuesta total a **54 segundos** para un expediente de 33 páginas (~0.8s por página).
 
-# 3. En Odoo: Activar modo desarrollador → Actualizar lista de aplicaciones
-#    → Instalar "Validación OCR de Documentos"
-```
+### Restricciones de Contexto en Prompts y Mitigación de Alucinaciones
+* **Problema:** El modelo de visión sufría de fuga de contexto y alucinaba nombres de referencias o firmas descritas en copias de cédula o reportes APC ajenos, asignándolos erróneamente en campos como Dirección Residencial o Cónyuge.
+* **Solución:** Reescritura del prompt en `services.py` inyectando reglas de exclusión por página: la Dirección Residencial solo se extrae de la página con la cabecera `DATOS RESIDENCIALES`, devolviendo obligatoriamente `"NO ENCONTRADO"` en las demás páginas. Lo mismo se aplicó para cónyuge, restringiendo su búsqueda a la sección formal de `INFORMACIÓN DEL CÓNYUGE`.
+
+### Refactorización y Saneamiento de Reglas en validators.py
+* **is_dummy_value:** Implementación de un saneador en el backend que filtra de forma automática textos dummy del OCR (ej. `"NOT A PICTURED DOCUMENT"`, `"NO ENCONTRADO"`, `"NINGUNO"`).
+* **normalize_ocr_text:** Normalización de texto crudo para minúsculas, remoción de acentos y unificación de errores tipográficos comunes en OCR (ej. unificar `0posicion` a `oposicion`).
+* **VL-01 (Cédula):** Limpieza para retornar únicamente el primer número de cédula única para el cliente principal.
+* **VL-05 (Cargo):** Exclusión de prefijos y clasificaciones de tipo de cliente para capturar la ocupación concreta.
+* **VL-10 (Planilla):** Exclusión de cédulas y compatibilidad con formatos de nómina gubernamentales complejos (ej. `8-21-06-0-01979`).
+* **VL-11 (Dirección):** Restricción de longitud mínima a 10 caracteres para evadir falsos positivos cortos.
+* **VL-13 (Proximidad):** Modificación en la evaluación de YOLO para que si faltan firmas o huellas, la regla falle explícitamente (`passed=False`) reportando la alerta con severidad "Aviso", en lugar de retornar True.
 
 ---
 
-*Módulo desarrollado para Grupo Saleta. Para consultas técnicas, revisar `RELEASE_NOTES.md`.*
+*Módulo desarrollado para Grupo Saleta. Para consultas técnicas, revisar RELEASE_NOTES.md.*
