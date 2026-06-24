@@ -6,7 +6,7 @@ Módulo de **validación documental automatizada** para expedientes de préstamo
 
 ## 1. Bitácora de Cambios
 
-### 24/06/2026 — Inferencia Multimodal Directa (Qwen2.5-VL), Detección de Huellas Leves y Sustitución de YOLO
+### Del 22/06/2026 al 24/06/2026 — Inferencia Multimodal Directa (Qwen2.5-VL), Detección de Huellas Leves y Sustitución de YOLO
 * **Descripción del problema:** La detección de firmas y huellas dactilares mediante el modelo YOLOv8 (`best.pt`) requería un re-entrenamiento constante de bounding boxes y presentaba limitaciones severas para discernir el contexto semántico de los trazos (ej. determinar de quién es cada firma, asociar una huella específica al deudor o identificar firmas de oficiales/gerentes en áreas de aprobación). Adicionalmente, las huellas dactilares muy tenues presentes en las páginas de firma del contrato (págs. 27, 29, 31 y 33 del expediente `PR07-5896.pdf`) no eran detectadas debido a la baja resolución de entrada en el OCR, y en páginas extensas de contrato el bloque de chequeos visuales (anteriormente colocado al final) se truncaba por límites de tokens del LLM.
 * **Acciones técnicas ejecutadas:**
   * **Migración a Qwen2.5-VL:** Se evaluaron múltiples modelos multimodales (incluyendo `gemma4` y `granite3.2-vision`), optando por **Qwen2.5-VL** por su superior precisión de OCR y análisis visual de elementos gráficos.
