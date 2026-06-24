@@ -21,7 +21,7 @@ except Exception as e:
     images = []
 
 LLM_BASE_URL = "http://ollama:11434/v1"
-LLM_MODEL_NAME = "qwen2.5vl-8k"
+LLM_MODEL_NAME = "gemma4"
 
 output_file = "/app/ocr_responses.txt"
 with open(output_file, "w") as f:

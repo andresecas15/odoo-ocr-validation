@@ -17,6 +17,8 @@ from services import (
     run_ocr,
     run_yolo,
     run_yolo_detailed,
+    get_cached_ocr,
+    save_cached_ocr,
 )
 from validators import run_all_validations
 import services
@@ -71,21 +73,34 @@ async def analyze_pdf(request: AnalyzeRequest) -> AnalyzeResponse:
     logger.info("Nuevo análisis: '%s'", request.filename)
     logger.info("-" * 60)
 
-    # 1: Decodificar PDF
-    pdf_bytes = decode_pdf(request.file_data)
-    logger.info("Archivo decodificado: %s (%.2f KB)", request.filename, len(pdf_bytes) / 1024)
+    # 1: Comprobar caché de OCR
+    extracted_text = get_cached_ocr(request.file_data, services.LLM_MODEL_NAME)
+    paginas_procesadas = 0
+    
+    if extracted_text is None:
+        # Decodificar PDF
+        pdf_bytes = decode_pdf(request.file_data)
+        logger.info("Archivo decodificado: %s (%.2f KB)", request.filename, len(pdf_bytes) / 1024)
 
-    # 2: Convertir PDF a imágenes
-    images = pdf_to_images(pdf_bytes)
+        # Convertir PDF a imágenes
+        images = pdf_to_images(pdf_bytes)
+        paginas_procesadas = len(images)
 
-    # 3: Extracción de texto y fecha con PaddleOCR
-    extracted_text = run_ocr(images)
+        # Extracción de texto y fecha con Ollama OCR
+        extracted_text = run_ocr(images)
+        save_cached_ocr(request.file_data, extracted_text, services.LLM_MODEL_NAME)
+    else:
+        if "--- PAGE_SEPARATOR ---" in extracted_text:
+            paginas_procesadas = len(extracted_text.split("--- PAGE_SEPARATOR ---"))
+        else:
+            paginas_procesadas = len(extracted_text.split("\n\n"))
     fecha_word_count, firma_word_count, fecha_value_count, fecha_valor, llm_firma_detected = extract_text_statistics(extracted_text)
 
-    # 4: Detección de firmas y huellas con YOLO
-    firma_count, huella_count = run_yolo(images)
-    
-    firma_detected = firma_count > 0 or llm_firma_detected
+    # 4: Detección de firmas y huellas con LLM (Vision/OCR check)
+    from services import parse_llm_visual_checks_from_text
+    firma_detected, pages_firma, pages_huella, relations = parse_llm_visual_checks_from_text(extracted_text)
+    firma_count = len(pages_firma)
+    huella_count = len(pages_huella)
     huella_detected = huella_count > 0
     fecha_encontrada = fecha_value_count > 0
 
@@ -101,7 +116,7 @@ async def analyze_pdf(request: AnalyzeRequest) -> AnalyzeResponse:
         firma_word_count=firma_word_count,
         firma_detected_count=firma_count,
         detalles={
-            "paginas_procesadas": len(images),
+            "paginas_procesadas": paginas_procesadas,
             "texto_extraido_longitud": len(extracted_text),
             "yolo_disponible": services.yolo_model is not None,
         },
@@ -144,20 +159,45 @@ async def validate_loan(request: AnalyzeRequest) -> LoanValidationResponse:
     logger.info("Validación de préstamo: '%s'", request.filename)
     logger.info("=" * 60)
 
-    pdf_bytes = decode_pdf(request.file_data)
-    images = pdf_to_images(pdf_bytes)
-    extracted_text = run_ocr(images)
+    # Comprobar caché de OCR
+    extracted_text = get_cached_ocr(request.file_data, services.LLM_MODEL_NAME)
+    paginas_procesadas = 0
+    
+    if extracted_text is None:
+        pdf_bytes = decode_pdf(request.file_data)
+        images = pdf_to_images(pdf_bytes)
+        paginas_procesadas = len(images)
+        extracted_text = run_ocr(images)
+        save_cached_ocr(request.file_data, extracted_text, services.LLM_MODEL_NAME)
+    else:
+        if "--- PAGE_SEPARATOR ---" in extracted_text:
+            paginas_procesadas = len(extracted_text.split("--- PAGE_SEPARATOR ---"))
+        else:
+            paginas_procesadas = len(extracted_text.split("\n\n"))
 
     fecha_word_count, firma_word_count, fecha_value_count, fecha_valor, llm_firma_detected = extract_text_statistics(extracted_text)
 
-    # Usamos run_yolo_detailed para obtener las coordenadas de los bounding boxes y las páginas
-    firma_count, huella_count, boxes_firma, boxes_huella, pages_firma, pages_huella = run_yolo_detailed(images)
-    firma_detected = firma_count > 0 or llm_firma_detected
-    huella_detected = huella_count > 0
+    # Extraer estado de firmas, huellas y relaciones semánticas desde el texto de Gemma4 (bypass YOLO)
+    from services import parse_llm_visual_checks_from_text
+    firma_detected, pages_firma, pages_huella, relations = parse_llm_visual_checks_from_text(extracted_text)
+    huella_detected = len(pages_huella) > 0
+    firma_count = len(pages_firma)
+    huella_count = len(pages_huella)
 
     # Ejecutar las 13 validaciones
     loan_type_value = getattr(request, "loan_type", "cies")
-    results = run_all_validations(extracted_text, firma_detected, boxes_firma, boxes_huella, pages_firma, loan_type_value)
+    results = run_all_validations(
+        extracted_text,
+        firma_detected,
+        pages_firma,
+        pages_huella,
+        relations,
+        loan_type_value
+    )
+
+    # Auditar falsos positivos con LLM (Opción B)
+    from services import audit_validations_with_llm
+    results = audit_validations_with_llm(results, extracted_text)
 
     total_errors = sum(1 for r in results if not r.passed and r.severity == "error")
     total_warnings = sum(1 for r in results if not r.passed and r.severity == "warning")
@@ -183,7 +223,7 @@ async def validate_loan(request: AnalyzeRequest) -> LoanValidationResponse:
         firma_word_count=firma_word_count,
         firma_detected_count=firma_count,
         detalles={
-            "paginas_procesadas": len(images),
+            "paginas_procesadas": paginas_procesadas,
             "texto_extraido_longitud": len(extracted_text),
             "yolo_disponible": services.yolo_model is not None,
         },

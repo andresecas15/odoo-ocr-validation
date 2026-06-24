@@ -52,7 +52,7 @@ services:
     container_name: odoo_ocr_ollama
     restart: unless-stopped
     ports:
-      - "11434:11434"
+      - "11435:11434"
     volumes:
       - ./ollama_data:/root/.ollama
     networks:
@@ -83,7 +83,7 @@ services:
     environment:
       - LLM_API_KEY=ollama
       - LLM_BASE_URL=http://ollama:11434/v1
-      - LLM_MODEL_NAME=qwen2.5vl-8k
+      - LLM_MODEL_NAME=qwen2.5vl
     deploy:
       resources:
         reservations:

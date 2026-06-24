@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import json
 import os
 from io import BytesIO
 from typing import Optional
@@ -140,6 +142,12 @@ def run_ocr(images: list) -> str:
     def process_page(i: int, pil_image) -> None:
         logger.info("Procesando página %d/%d con modelo Ollama (%s)...", i+1, len(images), LLM_MODEL_NAME)
         
+        # Redimensionar la imagen si supera 1024px en algún eje para reducir tokens de visión en Ollama
+        max_size = 1024
+        if pil_image.width > max_size or pil_image.height > max_size:
+            pil_image = pil_image.copy()
+            pil_image.thumbnail((max_size, max_size))
+
         # Convertir a Base64 con alta calidad para evitar difuminado de números
         buffered = BytesIO()
         pil_image.save(buffered, format="JPEG", quality=90)
@@ -149,51 +157,20 @@ def run_ocr(images: list) -> str:
             {
                 "role": "system",
                 "content": (
-                    "Eres un asistente experto en extracción de datos estructurados a partir de expedientes de crédito. "
-                    "Tu objetivo es leer la imagen y extraer EXACTAMENTE los campos solicitados utilizando el formato clave-valor. "
-                    "REGLAS DE EXTRACCIÓN CRÍTICAS:\n"
-                    "1. TABLA DATOS LABORALES: La sección 'DATOS LABORALES' tiene la estructura:\n"
-                    "   Tipo de Cliente | Cargo o Posición | Salario | Teléfono\n"
-                    "   Asegúrate de extraer en 'Cargo o Posicion' el valor de la segunda columna (ej. 'Oficinista', 'Educador') y NO el Tipo de Cliente (ej. 'Gobierno', 'Privado').\n"
-                    "2. TALONARIO CSS: En el talonario de Seguro Social (CSS), el número de Seguro Social ('No. S. SOCIAL' o 'No. SEG. SOCIAL') puede aparecer como '0999-9999'. El número 'No. COLABORADOR' (ej. '8-21-06-0-01979') corresponde al 'Número de Planilla' y NO a la Cédula ni al Seguro Social. Extráelos correctamente.\n"
-                    "3. INFORMACIÓN DEL CÓNYUGE: Extrae los datos del cónyuge ÚNICAMENTE si estás leyendo la página del formulario de solicitud que contiene explícitamente la sección titulada 'INFORMACIÓN DEL CÓNYUGE'. Si estás en cualquier otra página (como copias de cédulas, cartas de trabajo o reportes APC), DEBES escribir 'NO ENCONTRADO' para todos los campos de cónyuge. No inventes ni extraigas nombres de personas de otras secciones o documentos.\n"
-                    "4. DIRECCIÓN RESIDENCIAL: Extrae la dirección residencial del cliente ÚNICAMENTE si estás leyendo la página del formulario de solicitud que contiene la sección titulada 'DATOS RESIDENCIALES'. Si estás en cualquier otra página (como copias de cédulas, cartas de trabajo o reportes APC), DEBES escribir 'NO ENCONTRADO' para este campo. No inventes ni extraigas nombres de personas o direcciones de otras secciones.\n"
-                    "5. Si un campo no está presente, escribe 'NO ENCONTRADO'.\n\n"
-                    "DEBES devolver tu respuesta respetando exactamente esta plantilla:\n\n"
-                    "Cedula: [Cédula del cliente (formato prov-tomo-asiento), ej. 8-733-1006. Si no hay, escribe 'NO ENCONTRADO']\n"
-                    "Motivo de Prestamo: [tipo de crédito o préstamo, ej. PRESTAMOS CIES]\n"
-                    "Numero de Seguro Social: [NSS del cliente, ej. 0999-9999. Si no hay, escribe 'NO ENCONTRADO']\n"
-                    "Referencia Bancaria: [Nombre de los bancos listados como referencias, separados por comas. Si no hay ninguno, escribe 'NO ENCONTRADO']\n"
-                    "Referencia Personal: [Nombre completo de las personas listadas como referencias personales, separados por comas. Si no hay ninguno, escribe 'NO ENCONTRADO'. NO menciones firmas ni estados de firma aquí]\n"
-                    "Cargo o Posicion: [Cargo o posición del cliente en datos laborales, ej. Oficinista. NO pongas el tipo de cliente como Gobierno o Privado aquí]\n"
-                    "Rango Salarial o Salario: [Rango exacto o monto, ej. 1200.01 - 1500.00 o 669.18]\n"
-                    "Lugar de Nacimiento: [Provincia visible, ej. Veraguas, Chiriqui, Panama. Si no hay, escribe 'NO ENCONTRADO']\n"
-                    "Efectividad: [mencionar si existe]\n"
-                    "Numero de Planilla: [Número de planilla o colaborador, ej. 8-21-06-0-01979. Si no hay, escribe 'NO ENCONTRADO']\n"
-                    "Estado Civil: [valor, ej. Casado(a), Soltero(a)]\n"
-                    "Conyuge Nombre: [Nombre completo del cónyuge en la sección de información del cónyuge. Si no hay o no aplica, escribe 'NO ENCONTRADO']\n"
-                    "Conyuge Cedula: [Cédula o Pasaporte del cónyuge escrito en el formulario, ej. 8-724-379. Escríbela tal cual aparece en el campo de Cédula/Pasaporte del cónyuge. Si no hay o no aplica, escribe 'NO ENCONTRADO']\n"
-                    "Conyuge Labora: [SI o NO si el cónyuge trabaja. Si no hay o no aplica, escribe 'NO ENCONTRADO']\n"
-                    "Conyuge Empresa: [Nombre de la empresa donde labora el cónyuge, ej. Empresa Privada. Si no hay o no aplica, escribe 'NO ENCONTRADO']\n"
-                    "Direccion Residencial: [Dirección residencial completa del cliente. Escríbela COMPLETA y de forma detallada, palabra por palabra, tal como aparece en el documento, ej. EDIFICIO PH ALTOS DEL NAZARETH, APARTAMENTO 445... Si no hay, escribe 'NO ENCONTRADO']\n"
-                    "Firmas: [Indica detalladamente SI detectas firmas manuscritas en la página y cuántas (Ej. SI, 2)]\n"
-                    "Texto Adicional: [breve resumen de campos extra que consideres útiles, como fechas o montos adicionales]"
+                    "Eres un sistema de OCR y análisis visual de alta precisión. Tu tarea consiste en procesar la imagen de una página de un expediente de préstamo en dos partes:\n\n"
+                    "1. CHEQUEOS VISUALES: Al inicio de tu respuesta, añade obligatoriamente una línea separadora '--- CHEQUEOS VISUALES ---' y proporciona la siguiente plantilla completada con metadatos sobre la página:\n"
+                    "Firma Cliente: [SI o NO si detectas la firma manuscrita del deudor/cliente en esta página]\n"
+                    "Huella Cliente: [SI o NO si detectas la huella dactilar o el óvalo gris del deudor/cliente en esta página, incluso si es muy leve, tenue, borrosa o apenas visible al lado de la firma]\n"
+                    "Relacion Firma Huella: [CORRECTA, SOLAPADA, LEJOS o NO APLICA. Si hay firma y huella del cliente en la página, evalúa si la huella está al lado/encima de la firma o alejada. Si no hay huella o firma, escribe NO APLICA]\n"
+                    "Firma Oficial: [SI o NO si detectas la firma de aprobación de un oficial o gerente en las áreas de firmas de la entidad]\n\n"
+                    "A continuación, añade una línea separadora '--- FIN CHEQUEOS VISUALES ---' y continúa con:\n"
+                    "2. TRANSCRIPCIÓN LITERAL (OCR): Transcribe de forma exacta, literal y línea por línea todo el texto visible en la imagen (incluyendo nombres, cédulas, tablas, encabezados, cargos, montos, direcciones y fechas). NO resumas, NO agrupes en categorías creadas por ti y NO omitas información."
                 )
             },
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "text", 
-                        "text": "Analiza la imagen y extrae la información completando estrictamente la plantilla solicitada. Presta mucha atención a las 'Referencias Bancarias/Personales' escritas en listas, a la 'Provincia' en el campo de nacimiento, al 'Motivo/Tipo de préstamo', y al 'Salario' en formato de moneda."
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{img_str}"
-                        }
-                    }
-                ]
+                "content": "Realiza primero los chequeos visuales completando la plantilla bajo la línea '--- CHEQUEOS VISUALES ---'. Luego, tras la línea '--- FIN CHEQUEOS VISUALES ---', transcribe literalmente todo el texto visible en la imagen de la página.",
+                "images": [img_str]
             }
         ]
         
@@ -206,15 +183,20 @@ def run_ocr(images: list) -> str:
                 "stream": False,
                 "options": {
                     "temperature": 0.0,
-                    "num_predict": 2048
+                    "num_predict": 2048,
+                    "num_ctx": 8192
                 }
             }
             
-            response = requests.post(f"{LLM_BASE_URL}/chat/completions", json=payload, timeout=3600)
+            # Usar API nativa de Ollama /api/chat
+            api_url = LLM_BASE_URL.replace('/v1', '/api/chat') if '/v1' in LLM_BASE_URL else f"{LLM_BASE_URL}/api/chat"
+            response = requests.post(api_url, json=payload, timeout=3600)
+            if response.status_code != 200:
+                logger.error("Ollama error response: %s", response.text)
             response.raise_for_status()
             
             data = response.json()
-            page_text = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            page_text = data.get("message", {}).get("content", "").strip()
             
             extracted_text_parts[i] = page_text
             logger.info("✓ Página %d completada (%d caracteres).", i+1, len(page_text))
@@ -227,7 +209,7 @@ def run_ocr(images: list) -> str:
     with ThreadPoolExecutor(max_workers=4) as executor:
         executor.map(lambda pair: process_page(pair[0], pair[1]), enumerate(images))
 
-    extracted_text = "\n\n".join(extracted_text_parts)
+    extracted_text = "\n\n--- PAGE_SEPARATOR ---\n\n".join(extracted_text_parts)
 
     logger.info("LLM OCR completado exitosamente con Ollama. Texto total: %d caracteres.", len(extracted_text))
     # Para monitoreo local
@@ -353,4 +335,231 @@ def run_yolo_detailed(images: list) -> tuple[int, int, list, list, list[int], li
             pages_huella.append(page_num)
 
     return firma_count, huella_count, boxes_firma, boxes_huella, pages_firma, pages_huella
+
+
+def audit_validations_with_llm(results: list, full_text: str) -> list:
+    """
+    Audita los resultados que pasaron la validación de regex para detectar falsos positivos.
+    Utiliza el LLM para dar una opinión semántica.
+    """
+    if ocr_client is None:
+        logger.warning("Cliente LLM no disponible para auditoría.")
+        return results
+
+    # Buscar qué reglas pasaron y tienen valores extraídos
+    # Únicamente auditamos VL-10 (Planilla) para evitar falsos positivos
+    # Las validaciones de la 1 a la 7 (VL-01 a VL-07) se mantienen puramente con regex/OCR directo.
+    to_audit = {}
+    for r in results:
+        if not r.passed:
+            continue
+        
+        val = None
+        if r.code == "VL-10":
+            import re
+            m = re.search(r"detectada:\s*(\S+)", r.detail)
+            if m: val = m.group(1)
+            
+        if val:
+            to_audit[r.code] = {
+                "field_name": r.label,
+                "detected_value": val,
+                "result_obj": r
+            }
+
+    if not to_audit:
+        return results
+
+    fields_desc = []
+    for code, info in to_audit.items():
+        fields_desc.append(f"- Regla {code} ({info['field_name']}): Valor detectado: '{info['detected_value']}'")
+        
+    fields_list_str = "\n".join(fields_desc)
+    
+    prompt = (
+        "Actúa como un oficial de cumplimiento y auditor de datos. El sistema automático de expresiones regulares "
+        "ha extraído los siguientes valores provisionales de un expediente de préstamo:\n\n"
+        f"{fields_list_str}\n\n"
+        "A partir del siguiente texto del documento extraído por OCR, audita cada uno de estos valores para verificar si son correctos o si son FALSOS POSITIVOS "
+        "(por ejemplo: si el salario es en realidad un año, o si la planilla es en realidad otra cédula, o si no corresponde al campo del cliente).\n\n"
+        "Texto del documento:\n"
+        "\"\"\"\n"
+        f"{full_text[:4000]}\n"
+        "\"\"\"\n\n"
+        "Responde ESTRICTAMENTE en formato JSON con la siguiente estructura y nada más:\n"
+        "{\n"
+        "  \"VL-10\": {\"is_correct\": true, \"corrected_value\": \"8-21-06-0-01979\", \"reason\": \"El número de planilla coincide con la nómina de gobierno\"}\n"
+        "}"
+    )
+    
+    messages = [
+        {
+            "role": "user",
+            "content": prompt
+        }
+    ]
+    
+    payload = {
+        "model": LLM_MODEL_NAME,
+        "messages": messages,
+        "stream": False,
+        "options": {
+            "temperature": 0.0,
+            "num_predict": 1024
+        }
+    }
+    
+    try:
+        import requests
+        import json
+        
+        logger.info("Enviando auditoría de falsos positivos al LLM para las reglas: %s...", ", ".join(to_audit.keys()))
+        response = requests.post(f"{LLM_BASE_URL}/chat/completions", json=payload, timeout=60)
+        response.raise_for_status()
+        
+        data = response.json()
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+        
+        audit_results = json.loads(content)
+        
+        for code, audit_info in audit_results.items():
+            if code in to_audit:
+                is_correct = audit_info.get("is_correct", True)
+                reason = audit_info.get("reason", "")
+                
+                if not is_correct:
+                    r = to_audit[code]["result_obj"]
+                    r.passed = False
+                    r.detail = f"Falso positivo detectado por LLM: {reason}"
+                    logger.warning("⚠️ Falso positivo confirmado por LLM en regla %s: %s", code, reason)
+                    
+    except Exception as e:
+        logger.error("Error en la auditoría del LLM: %s", e)
+        
+    return results
+
+
+def parse_llm_visual_checks_from_text(extracted_text: str) -> tuple[bool, list[int], list[int], list[str]]:
+    """
+    Analiza el texto OCR consolidado página por página y extrae el estado
+    de firmas, huellas y su proximidad semántica.
+    
+    Returns:
+        firma_detected (bool)       – ¿se detectó firma en alguna página?
+        pages_firma    (list[int])  – páginas con firma (1-indexed)
+        pages_huella   (list[int])  – páginas con huella (1-indexed)
+        relations      (list[str])  – lista de relaciones de proximidad de huella-firma encontradas
+    """
+    import re
+    if "--- PAGE_SEPARATOR ---" in extracted_text:
+        pages = extracted_text.split("--- PAGE_SEPARATOR ---")
+    else:
+        pages = extracted_text.split("\n\n")
+    pages_firma = []
+    pages_huella = []
+    relations = []
+    firma_detected = False
+    
+    for i, page_text in enumerate(pages):
+        page_num = i + 1
+        
+        # Firma Cliente: SI/NO
+        m_fc = re.search(r"(?i)Firma\s+Cliente:\s*(SI|NO)", page_text)
+        m_f = re.search(r"(?i)Firmas?:\s*(SI|NO)", page_text)
+        
+        is_firma = False
+        if m_fc and m_fc.group(1).upper() == "SI":
+            is_firma = True
+        elif m_f and m_f.group(1).upper() == "SI":
+            is_firma = True
+            
+        # Firma Oficial: SI/NO (también cuenta como firma en el documento)
+        m_fo = re.search(r"(?i)Firma\s+Oficial:\s*(SI|NO)", page_text)
+        if m_fo and m_fo.group(1).upper() == "SI":
+            is_firma = True
+            
+        if is_firma:
+            pages_firma.append(page_num)
+            firma_detected = True
+            
+        # Huella Cliente: SI/NO
+        m_hc = re.search(r"(?i)Huella\s+Cliente:\s*(SI|NO)", page_text)
+        is_huella = False
+        if m_hc and m_hc.group(1).upper() == "SI":
+            is_huella = True
+            
+        # Relacion Firma Huella: CORRECTA/SOLAPADA/LEJOS/NO APLICA
+        m_rel = re.search(r"(?i)Relacion\s+Firma\s+Huella:\s*(\S+)", page_text)
+        if m_rel:
+            val = m_rel.group(1).upper().replace(",", "").replace(".", "").replace("[", "").replace("]", "").strip()
+            if val in ("CORRECTA", "SOLAPADA", "LEJOS"):
+                relations.append(val)
+                is_huella = True
+            elif val == "NO APLICA":
+                relations.append(val)
+                
+        if is_huella:
+            pages_huella.append(page_num)
+                
+    return firma_detected, pages_firma, pages_huella, relations
+
+
+def get_ocr_cache_path() -> str:
+    """Retorna la ruta del archivo de caché de OCR."""
+    cache_dir = "/app/models_ml"
+    if not os.path.exists(cache_dir):
+        # Fallback para desarrollo local fuera de Docker
+        cache_dir = os.path.join(os.path.dirname(__file__), "models_ml")
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, "ocr_text_cache.json")
+
+
+def get_cached_ocr(file_data_b64: str, model_name: str) -> Optional[str]:
+    """Obtiene el texto OCR en caché a partir del hash del Base64 del PDF y el nombre del modelo."""
+    if not file_data_b64 or not model_name:
+        return None
+    try:
+        file_hash = hashlib.sha256(file_data_b64.encode('utf-8')).hexdigest()
+        cache_key = f"{model_name}_{file_hash}"
+        cache_path = get_ocr_cache_path()
+        if os.path.exists(cache_path):
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cache_data = json.load(f)
+                if cache_key in cache_data:
+                    logger.info("⚡ Caché de OCR HIT para modelo %s y hash %s. Evitando procesamiento.", model_name, file_hash)
+                    return cache_data[cache_key]
+    except Exception as e:
+        logger.warning("Error leyendo caché de OCR: %s", e)
+    return None
+
+
+def save_cached_ocr(file_data_b64: str, text: str, model_name: str) -> None:
+    """Guarda el texto OCR en caché con clave basada en el modelo y el hash."""
+    if not file_data_b64 or not text or not model_name:
+        return
+    try:
+        file_hash = hashlib.sha256(file_data_b64.encode('utf-8')).hexdigest()
+        cache_key = f"{model_name}_{file_hash}"
+        cache_path = get_ocr_cache_path()
+        cache_data = {}
+        if os.path.exists(cache_path):
+            with open(cache_path, "r", encoding="utf-8") as f:
+                try:
+                    cache_data = json.load(f)
+                except Exception:
+                    cache_data = {}
+        cache_data[cache_key] = text
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(cache_data, f, ensure_ascii=False, indent=2)
+        logger.info("✓ Guardado en caché de OCR para modelo %s bajo hash %s.", model_name, file_hash)
+    except Exception as e:
+        logger.warning("Error guardando caché de OCR: %s", e)
+
+
 

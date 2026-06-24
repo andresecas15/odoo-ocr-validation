@@ -37,4 +37,4 @@ DATE_REGEX = re.compile(
 # API Keys y Endpoints
 LLM_API_KEY = os.getenv("LLM_API_KEY", "ollama")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://ollama:11434/v1")
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "llava:7b")
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "gemma4")

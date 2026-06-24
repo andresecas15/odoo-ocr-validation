@@ -4,11 +4,21 @@ Módulo de **validación documental automatizada** para expedientes de préstamo
 
 ---
 
-## 1. Bitácora de Cambios (21/06/2026)
+## 1. Bitácora de Cambios
 
-Este registro documenta las adecuaciones de infraestructura, optimizaciones de prompts y la refactorización de lógica de validación ejecutadas durante el día de hoy:
+### 24/06/2026 — Inferencia Multimodal Directa (Qwen2.5-VL), Detección de Huellas Leves y Sustitución de YOLO
+* **Descripción del problema:** La detección de firmas y huellas dactilares mediante el modelo YOLOv8 (`best.pt`) requería un re-entrenamiento constante de bounding boxes y presentaba limitaciones severas para discernir el contexto semántico de los trazos (ej. determinar de quién es cada firma, asociar una huella específica al deudor o identificar firmas de oficiales/gerentes en áreas de aprobación). Adicionalmente, las huellas dactilares muy tenues presentes en las páginas de firma del contrato (págs. 27, 29, 31 y 33 del expediente `PR07-5896.pdf`) no eran detectadas debido a la baja resolución de entrada en el OCR, y en páginas extensas de contrato el bloque de chequeos visuales (anteriormente colocado al final) se truncaba por límites de tokens del LLM.
+* **Acciones técnicas ejecutadas:**
+  * **Migración a Qwen2.5-VL:** Se evaluaron múltiples modelos multimodales (incluyendo `gemma4` y `granite3.2-vision`), optando por **Qwen2.5-VL** por su superior precisión de OCR y análisis visual de elementos gráficos.
+  * **Sustitución de YOLO:** Se eliminó el uso de YOLO en producción. Ahora, el System Prompt en [services.py](file:///home/aecas/Documentos/GrupoSaleta/odoo_ocr_project/ocr_microservice/services.py) instruye al LLM a realizar un análisis espacial en cada página previo a la transcripción literal, devolviendo metadatos estructurados (`Firma Cliente`, `Huella Cliente`, `Relacion Firma Huella`, `Firma Oficial`).
+  * **Detección de Huellas Leves:** Se incrementó la resolución máxima de imágenes de `448px` a `1024px` en [services.py](file:///home/aecas/Documentos/GrupoSaleta/odoo_ocr_project/ocr_microservice/services.py) para no perder trazos tenues.
+  * **Reordenación de Prompt (Prevención de Truncamiento):** Se colocó el bloque `--- CHEQUEOS VISUALES ---` al inicio de las respuestas del modelo.
+  * **Paginación Exacta:** Se implementó el separador de página único `\n\n--- PAGE_SEPARATOR ---\n\n` para unir las páginas en [services.py](file:///home/aecas/Documentos/GrupoSaleta/odoo_ocr_project/ocr_microservice/services.py), corrigiendo el conteo erróneo de páginas en [main.py](file:///home/aecas/Documentos/GrupoSaleta/odoo_ocr_project/ocr_microservice/main.py) (que confundía saltos de párrafo con páginas físicas, reportando 419 en lugar de 33).
+  * **Ajuste VL-13 (Proximidad):** Se flexibilizó `val_proximidad_huella_firma` en [validators.py](file:///home/aecas/Documentos/GrupoSaleta/odoo_ocr_project/ocr_microservice/validators.py) para priorizar los aciertos de proximidad sobre falsas alertas de lejanía provocadas por firmas de oficiales en la misma página.
+  * **Caché OCR Persistente Segmentada:** Se modificó `models_ml/ocr_text_cache.json` en [main.py](file:///home/aecas/Documentos/GrupoSaleta/odoo_ocr_project/ocr_microservice/main.py) y [services.py](file:///home/aecas/Documentos/GrupoSaleta/odoo_ocr_project/ocr_microservice/services.py) para segmentar las entradas por modelo activo (`{model_name}_{file_hash}`), previniendo la mezcla de datos y reduciendo el tiempo de procesamiento de ~3 minutos a **1.7 segundos** en hits de caché.
+  * **Extracción Resiliente de Cónyuge (VL-12):** Se implementó una lógica de fallback por proximidad de secciones en [validators.py](file:///home/aecas/Documentos/GrupoSaleta/odoo_ocr_project/ocr_microservice/validators.py) que delimita la búsqueda entre el final de los datos laborales (`mover fondos publicos`) y el comienzo de las `referencias personales`, resolviendo omisiones de cabecera y errores tipográficos comunes en el OCR como `codua` en la cédula del cónyuge.
 
-### Configuración de GPU Dedicada y Corrección de Errores de API
+### 21/06/2026 — Configuración de GPU Dedicada y Corrección de Errores de API
 * **Descripción del problema:** Ocurrencia del error `400 Client Error: Bad Request` de forma constante en el endpoint de chat de Ollama. Cuelgues sistemáticos del contenedor local por agotamiento de memoria RAM/CPU al procesar de forma secuencial múltiples imágenes de alta resolución provenientes de PDFs de gran tamaño.
 * **Acciones técnicas ejecutadas:**
   * Migración del motor de inferencia al servidor remoto `172.17.0.33` provisto de una GPU Nvidia RTX 5080 (16GB VRAM).
@@ -49,8 +59,8 @@ El motor de validación se divide en tres componentes principales:
 
 1. **Odoo 16 (Addon custom):** Gestiona la carga de expedientes y la cola de procesamiento en segundo plano (asíncrono vía cron).
 2. **FastAPI Engine (`ocr_engine`):** Orquesta el flujo del análisis. Convierte PDFs a JPGs a 200 DPI y dispara los hilos de inferencia paralela. Ejecuta la lógica de validación definida en `validators.py`.
-3. **Ollama GPU (`odoo_ocr_ollama`):** Carga el modelo vision-language **Qwen2.5-VL-8k** utilizando Nvidia Docker Container Toolkit (CUDA) en el host `172.17.0.33`.
-4. **YOLOv8 (`best.pt`):** Modelo visual accesorio para la detección y cálculo geométrico de firmas y huellas en las páginas.
+3. **Ollama GPU (`odoo_ocr_ollama`):** Carga el modelo vision-language **Qwen2.5-VL** utilizando Nvidia Docker Container Toolkit (CUDA) en el host `172.17.0.33`.
+4. **YOLOv8 (`best.pt`):** Desactivado en producción en favor de la inferencia multimodal directa y contextual provista por Qwen2.5-VL (bypass de cajas delimitadoras).
 
 ---
 
@@ -72,7 +82,7 @@ Estas reglas se ejecutan de manera secuencial dentro del módulo `validators.py`
 | **VL-10** | Número de planilla | Error | Valida formatos de planilla de cobro. Excluye números de cédula identificados. |
 | **VL-11** | Longitud de dirección | Warning | Dirección residencial entre 10 y 120 caracteres. Restringida a la página de datos residenciales. |
 | **VL-12** | Información de cónyuge | Error | Exige datos de cónyuge si es casado/unido. Filtra valores dummy (`is_dummy_value`). |
-| **VL-13** | Proximidad huella-firma | Warning | Mide distancia entre huellas y firmas de YOLO. Falla si alguno de los elementos está ausente. |
+| **VL-13** | Proximidad huella-firma | Warning | Evalúa la proximidad y correspondencia entre firmas y huellas del deudor analizadas por Qwen2.5-VL. |
 
 ---
 
@@ -81,6 +91,6 @@ Estas reglas se ejecutan de manera secuencial dentro del módulo `validators.py`
 | Variable | Dónde | Valor por defecto | Descripción |
 |---|---|---|---|
 | `LLM_BASE_URL` | `docker-compose.yml` | `http://ollama:11434/v1` | URL base de la API de Ollama. |
-| `LLM_MODEL_NAME` | `docker-compose.yml` | `qwen2.5vl-8k` | Nombre del modelo multimodal utilizado. |
+| `LLM_MODEL_NAME` | `docker-compose.yml` | `qwen2.5vl` | Nombre del modelo multimodal utilizado. |
 | `OLLAMA_NUM_PARALLEL` | `docker-compose.yml` | `4` | Cantidad de peticiones simultáneas que Ollama procesa en GPU. |
 | `LOAN_VALIDATE_URL` | `loan_document.py` | `http://172.17.0.33:8000/api/v1/validate-loan` | Endpoint de validación de FastAPI en Odoo. |

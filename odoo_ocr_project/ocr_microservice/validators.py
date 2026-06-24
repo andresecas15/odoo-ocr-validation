@@ -61,11 +61,19 @@ _CEDULA_RE = re.compile(
 # Captura el VALOR justo después del label «motivo [de préstamo]»
 # Se limita a 80 chars y exige al menos 3 palabras para evitar capturar
 # encabezados de tabla ("OFICIAL DE CRÉDITO Jeyse...").
-_MOTIVO_KEYWORD_RE = re.compile(r'(?i)\b(?:motivo|tipo\s+de\s+cr[eé]dito)\b')
+_MOTIVO_KEYWORD_RE = re.compile(r'(?i)\b(?:motivo|tipo\s+de\s+cr[eé]dito|tipo\s+de\s+pr[eé]stamo|prop[oó]sito)\b')
 _MOTIVO_VALUE_RE = re.compile(
-    # Captura valor hasta 80 chars, pero frena INMEDIATAMENTE si ve otra Etiqueta (Ej. 'Numero de Seguro:')
-    r'(?i)\b(?:motivo\s*(?:de\s*pr[eé]stamo)?|tipo\s+de\s+cr[eé]dito)\s*[:\-=]?\s*'
-    r'(.{4,80}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑ\s/]+:|$)'
+    r'(?i)\b(?:'
+    r'razon\s+o\s+motivo\s+del?\s+pr[eé]stamo'
+    r'|razon\s+o\s+motivo'
+    r'|motivo\s+del?\s+pr[eé]stamo'
+    r'|motivo'
+    r'|prop[oó]sito\s+del?\s+pr[eé]stamo'
+    r'|prop[oó]sito'
+    r'|tipo\s+de\s+cr[eé]dito'
+    r'|tipo\s+de\s+pr[eé]stamo'
+    r')\s*[:\-=]?\s*'
+    r'([a-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00c1\u00c9\u00cd\u00d3\u00dañÑ/() ]{3,80})'
 )
 # Palabras de encabezado que indican falso positivo en VL-02
 _MOTIVO_FALSE_POSITIVE_RE = re.compile(
@@ -102,9 +110,9 @@ _REF_OLLAMA_MISSING_RE = re.compile(r'(?i)referencia\s+(?:bancaria|personal)\s*[
 # ESTRATEGIA OLLAMA: Ollama resume la fila como "- TIPO CLIENTE: GOBIERNO - DOCENTE"
 # o "- CARGO: DOCENTE" o "TIPO CUENTA: EDUCADOR".
 _CARGO_OLLAMA_RE = re.compile(
-    # Captura valor hasta 60 chars, frena si ve otra etiqueta:
-    r'(?i)(?:cargo|posici[oó]n|ocupaci[oó]n|profesi[oó]n)\s*[:\-]+\s*'
-    r'(.{3,60}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)'
+    # Captura valor hasta 60 chars en la misma línea, frena si ve otra etiqueta:
+    r'(?i)(?:cargo|posici[oó]n|ocupaci[oó]n|profesi[oó]n)[^\S\r\n]*[:\-]+[^\S\r\n]*'
+    r'([^\r\n]{3,60}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)'
 )
 
 _CARGO_LABEL_RE = re.compile(
@@ -257,7 +265,7 @@ def normalize_ocr_text(text: str) -> str:
     Limpia el texto proveniente de OCR para mejorar la fiabilidad de las validaciones:
     - Convierte a minúsculas
     - Remueve acentos (ej. 'MÉXICO' -> 'mexico')
-    - Reduce múltiples espacios y saltos de línea a un solo espacio
+    - Conserva el diseño de líneas pero unifica espacios horizontales
     - Reemplaza errores OCR comunes conocidos
     """
     if not text:
@@ -271,9 +279,11 @@ def normalize_ocr_text(text: str) -> str:
     text = text.replace('0posicion', 'oposicion') \
                .replace('1ngreso', 'ingreso')
     
-    # 3. Unificar todos los whitespaces (espacios, tabs, saltos de línea) en un solo espacio
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    # 3. Unificar espacios horizontales y limpiar saltos de línea múltiples
+    text = re.sub(r'[^\S\r\n]+', ' ', text)
+    text = re.sub(r'\r+', '', text)
+    text = re.sub(r'\n+', '\n', text)
+    return text.strip()
 
 def fuzzy_find(text: str, keyword: str, threshold: float = 85.0) -> int:
     """
@@ -297,6 +307,34 @@ def fuzzy_find(text: str, keyword: str, threshold: float = 85.0) -> int:
         idx = text.find(str(match[0]))
         return idx
     return -1
+
+
+def is_part_of_cedula(val: str, cedulas: list[str]) -> bool:
+    """Retorna True si el valor parece ser parte de una cédula para evitar falsos positivos."""
+    if not val or not cedulas:
+        return False
+        
+    val_clean = re.sub(r'\D', '', val)
+    cedulas_clean = [re.sub(r'\D', '', c) for c in cedulas]
+    
+    # Si es exactamente una cédula
+    if val_clean in cedulas_clean:
+        return True
+        
+    # Si es un rango (ej. "733 - 1006" o "933 - 1006")
+    if '-' in val or '–' in val:
+        # Extraer los números individuales
+        nums = re.findall(r'\d+', val)
+        for num in nums:
+            # Si el número individual es igual al tomo (medio) o asiento (final) de alguna cédula
+            for c in cedulas:
+                parts = re.split(r'[- ]', c)
+                if len(parts) >= 2:
+                    tomo = re.sub(r'\D', '', parts[-2])
+                    asiento = re.sub(r'\D', '', parts[-1])
+                    if num == tomo or num == asiento:
+                        return True
+    return False
 
 
 # ─── Funciones de validación ──────────────────────────────────────────────────
@@ -372,14 +410,16 @@ def val_numero_seguro_social(text: str) -> ValidationResult:
     """VL-03: Número de Seguro Social (NSS) presente y con formato correcto.
 
     Itera TODOS los matches del label 'Seguro Social' y elige el primero.
-    No descarta si es igual a la cédula ni si es 0999-9999 (que es el NSS de planilla).
+    Evita falsos positivos descartando si el valor coincide con alguna cédula.
     """
     nss = None
+    cedulas = _CEDULA_RE.findall(text)
+
     # 1. Intentar con salida estructurada de Ollama
     ollama_nss_re = re.compile(r'(?i)Numero de Seguro Social:\s*(?!no\s+encontrado)(.{2,40}?)(?=\s+[A-Za-z0-9áéíóúÁÉÍÓÚñÑé\s/]+:|$)')
     for m in ollama_nss_re.finditer(text):
         candidate = m.group(1).strip()
-        if not is_dummy_value(candidate):
+        if not is_dummy_value(candidate) and not is_part_of_cedula(candidate, cedulas):
             nss = candidate
             break
 
@@ -389,8 +429,10 @@ def val_numero_seguro_social(text: str) -> ValidationResult:
             ventana = text[label_m.end(): label_m.end() + 80]
             val_m = _NSS_VALUE_RE.search(ventana)
             if val_m:
-                nss = val_m.group(1)
-                break
+                candidate = val_m.group(1)
+                if not is_part_of_cedula(candidate, cedulas):
+                    nss = candidate
+                    break
 
     passed = nss is not None
     detail = (
@@ -465,7 +507,7 @@ def val_cargo_posicion(text: str) -> ValidationResult:
         cargo_ollama = match_.group(1).strip()
         # Clean prefix and check if it's just client type
         cargo_ollama = re.sub(r'^(?:gobierno|privado|independiente|jubilado|pensionado|publico|mixto)\s*[\-:]\s*', '', cargo_ollama, flags=re.IGNORECASE)
-        if not is_dummy_value(cargo_ollama) and cargo_ollama.upper() not in ("GOBIERNO", "PRIVADO", "INDEPENDIENTE", "JUBILADO", "PENSIONADO", "PUBLICO", "MIXTO"):
+        if not is_dummy_value(cargo_ollama) and cargo_ollama.upper() not in ("GOBIERNO", "PRIVADO", "INDEPENDIENTE", "JUBILADO", "PENSIONADO", "PUBLICO", "MIXTO", "PERMANENTE", "TEMPORAL", "NO APLICA", "NINGUNO", "NINGUNA", "N/A", "NA", "CARGO", "POSICION", "PROFESION", "OCUPACION", "OFICIO"):
             # Filtro básico anti-numérico (no solo números)
             if len(cargo_ollama) >= 3 and not re.fullmatch(r'\d+', cargo_ollama.replace(' ', '')):
                 return ValidationResult(
@@ -490,12 +532,11 @@ def val_cargo_posicion(text: str) -> ValidationResult:
     # Como la etiqueta existe en alguna parte del texto adicional, probar buscarla
     next_line_match = _CARGO_NEXT_LINE_RE.search(text)
     if next_line_match:
-        # Aquí next_line_match capturaba "O Posicion" si el label match fue "Cargo"
-        # Usamos una expresión más específica para el raw text
-        raw_val_match = re.search(r'(?i)(?:cargo|posici[oó]n|profesi[oó]n|oficio)\s*[:\-]?\s*([a-z\s/()]{3,40})', text)
-        if raw_val_match:
-            candidate = raw_val_match.group(1).strip()
-            if candidate.upper() not in ["O POSICION", "NO ENCONTRADO"] and len(candidate) >= 3:
+        # Usamos una expresión más específica para el raw text sin cruzar líneas
+        for raw_match in re.finditer(r'(?i)(?:cargo|posici[oó]n|profesi[oó]n|oficio|ocupaci[oó]n)(?:[^\S\r\n]*[:\-]+[^\S\r\n]*|[^\S\r\n]+(?:de|del)[^\S\r\n]+)([a-z\u00e1\u00e9\u00ed\u00f3\u00fa\u00c1\u00c9\u00cd\u00d3\u00dañÑ/() ]{3,40})', text):
+            candidate = raw_match.group(1).strip()
+            norm_cand = candidate.upper().replace("Á", "A").replace("É", "E").replace("Í", "I").replace("Ó", "O").replace("Ú", "U").strip()
+            if norm_cand not in ["O POSICION", "NO ENCONTRADO", "POSICION", "CARGO", "CARGO O POSICION", "PERMANENTE", "TEMPORAL", "NO APLICA", "NINGUNO", "NINGUNA", "N/A", "NA", "DIRECCION", "TELEFONO", "EMAIL", "CORREO", "CELULAR", "SALARIO", "SUELDO"] and len(candidate) >= 3:
                 return ValidationResult(
                     code="VL-05",
                     label="Posición / Cargo",
@@ -521,8 +562,7 @@ def val_rango_salarial(text: str) -> ValidationResult:
        luego en cualquier ventana del texto.  Un rango siempre es preferido a
        un monto suelto porque es la forma correcta que debe aparecer en el doc.
     2) Solo si no hay ningún rango, aceptar un monto simple >= 100.
-    Esto evita que un número hallucinated ("1992") oculte el rango real
-    ("1200.01 - 1500.00") que normalmente aparece en otra página.
+    Evita falsos positivos filtrando números que formen parte de las cédulas detectadas.
     """
 
     # ── Regex para detectar específicamente un rango (dos números con guión) ──
@@ -535,7 +575,35 @@ def val_rango_salarial(text: str) -> ValidationResult:
     )
 
     def _to_float(s: str) -> float:
-        return float(s.replace(',', '').replace('$', '').replace('B/.', '').strip())
+        s = s.replace('$', '').replace('B/.', '').replace('B/', '').strip()
+        if not s:
+            return 0.0
+        # Determinar si la coma o el punto actúa como decimal
+        if ',' in s and '.' in s:
+            if s.find(',') > s.find('.'):
+                # Formato: 1.200,00 -> eliminar punto, cambiar coma por punto
+                s = s.replace('.', '').replace(',', '.')
+            else:
+                # Formato: 1,200.00 -> eliminar coma
+                s = s.replace(',', '')
+        elif ',' in s:
+            # Solo comas: si hay una sola y tiene 1 o 2 decimales, es decimal
+            parts = s.split(',')
+            if len(parts) == 2 and len(parts[1]) in (1, 2):
+                s = s.replace(',', '.')
+            else:
+                s = s.replace(',', '')
+        elif '.' in s:
+            # Solo puntos: si tiene 3 dígitos tras el punto (ej. 1.200), suele ser separador de miles
+            parts = s.split('.')
+            if len(parts) == 2 and len(parts[1]) == 3:
+                s = s.replace('.', '')
+        try:
+            return float(s)
+        except ValueError:
+            return 0.0
+
+    cedulas = _CEDULA_RE.findall(text)
 
     # ── Recopilar candidatos de Ollama ──
     ollama_ranges: list[tuple[str, str]] = []
@@ -547,6 +615,9 @@ def val_rango_salarial(text: str) -> ValidationResult:
         # ¿Tiene rango explícito?
         for rm in _RANGE_EXPLICIT_RE.finditer(val_str):
             try:
+                candidate = rm.group(0).strip()
+                if is_part_of_cedula(candidate, cedulas):
+                    continue
                 v1 = _to_float(rm.group(1))
                 v2 = _to_float(rm.group(2))
                 if v1 >= 100.0 and v2 >= 100.0:
@@ -558,6 +629,9 @@ def val_rango_salarial(text: str) -> ValidationResult:
             for sm in _SALARY_RANGE_RE.finditer(val_str):
                 if sm.group(1) and not sm.group(2):
                     try:
+                        candidate = sm.group(1).strip()
+                        if is_part_of_cedula(candidate, cedulas):
+                            continue
                         if _to_float(sm.group(1)) >= 100.0:
                             ollama_singles.append(sm.group(1))
                     except (ValueError, AttributeError):
@@ -569,6 +643,9 @@ def val_rango_salarial(text: str) -> ValidationResult:
         window = text[kw_m.start(): min(len(text), kw_m.start() + _SALARY_CONTEXT_WINDOW * 5)]
         for rm in _RANGE_EXPLICIT_RE.finditer(window):
             try:
+                candidate = rm.group(0).strip()
+                if is_part_of_cedula(candidate, cedulas):
+                    continue
                 v1 = _to_float(rm.group(1))
                 v2 = _to_float(rm.group(2))
                 if v1 >= 100.0 and v2 >= 100.0:
@@ -613,6 +690,9 @@ def val_rango_salarial(text: str) -> ValidationResult:
         for sm in _SALARY_RANGE_RE.finditer(window):
             if sm.group(1):
                 try:
+                    candidate = sm.group(0).strip()
+                    if is_part_of_cedula(candidate, cedulas):
+                        continue
                     if _to_float(sm.group(1)) >= 100.0:
                         rango_str = f"{sm.group(1)} - {sm.group(2)}" if sm.group(2) else sm.group(1)
                         return ValidationResult(
@@ -788,7 +868,7 @@ def val_numero_planilla(text: str) -> ValidationResult:
     cedulas = _CEDULA_RE.findall(text)
     unique_candidates = []
     for c in candidatos:
-        if c not in unique_candidates and c not in cedulas:
+        if c not in unique_candidates and not is_part_of_cedula(c, cedulas):
             unique_candidates.append(c)
 
     has_candidates = len(unique_candidates) > 0
@@ -969,6 +1049,90 @@ def val_info_conyugue(text: str) -> ValidationResult:
             if not is_dummy_value(val):
                 empresa_str = val
 
+    # Fallback si no se encontró vía estructura de Ollama pero existe bloque de Contrato/Conyuge por OCR directo
+    if not nombre_str:
+        idx_contrato = text.find("informacion del contrato")
+        if idx_contrato == -1:
+            idx_contrato = text.find("informacion del conyuge")
+            
+        sub_text = None
+        if idx_contrato != -1:
+            sub_text = text[idx_contrato:idx_contrato + 400]
+        else:
+            # Fallback por proximidad de secciones si el OCR omitió el encabezado
+            idx_laborales = text.find("fondos publicos")
+            if idx_laborales == -1:
+                idx_laborales = text.find("datos laborales")
+            idx_referencias = text.find("referencias personales", idx_laborales)
+            if idx_laborales != -1 and idx_referencias != -1 and idx_laborales < idx_referencias:
+                sub_text = text[idx_laborales:idx_referencias]
+            
+        if sub_text:
+            # Robust literal regex matching
+            temp_nombre = None
+            temp_cedula = None
+            temp_labora = None
+            temp_empresa = None
+            
+            m_nom = re.search(r'(?:nombre completo|nombre)\s*[:\-]\s*([a-z\u00e1\u00e9\u00ed\u00f3\u00fañ\s]+)', sub_text)
+            if m_nom:
+                temp_nombre = m_nom.group(1).split('\n')[0].strip()
+                
+            m_ced = re.search(r'(?:cedula/pasaporte|cedula|codua|pasaporte)\s*[:\-]\s*([a-z0-9\-]+)', sub_text)
+            if m_ced:
+                temp_cedula = m_ced.group(1).split('\n')[0].strip()
+                
+            m_lab = re.search(r'(?:laborat|labora|trabaja)\s*[:\-]?\s*([^\n]*)', sub_text)
+            if m_lab:
+                lab_line = m_lab.group(1).lower()
+                lab_window_idx = sub_text.find(m_lab.group(0)) + len(m_lab.group(0))
+                lab_window = sub_text[lab_window_idx:lab_window_idx + 100].lower()
+                if 'si' in lab_line or 'si x' in lab_line or 'si x' in lab_window or 'si' in lab_window:
+                    temp_labora = "si"
+                else:
+                    temp_labora = "no"
+                    
+            m_emp = re.search(r'(?:direccion laboral|nombre empresa|empresa)\s*[:\-]\s*([a-z\u00e1\u00e9\u00ed\u00f3\u00fañ\s]+)', sub_text)
+            if m_emp:
+                temp_empresa = m_emp.group(1).split('\n')[0].strip()
+            
+            # If any are missing, try line-by-line fallback
+            lineas = [l.strip() for l in sub_text.split("\n") if l.strip()]
+            for idx_l, line in enumerate(lineas[1:6]):
+                if not temp_cedula:
+                    m_ced = _CEDULA_RE.search(line)
+                    if m_ced:
+                        temp_cedula = m_ced.group(0)
+                        if not temp_nombre and idx_l + 2 < len(lineas):
+                            next_line = lineas[idx_l + 2]
+                            if not any(kw in next_line for kw in ("direccion", "empresa", "telefono", "labora")):
+                                temp_nombre = next_line
+                if not temp_empresa:
+                    if "empresa privada" in line:
+                        temp_empresa = "empresa privada"
+                    elif "empresa" in line or "nombre empresa" in line:
+                        m_emp_lbl = re.search(r'(?:nombre\s+)?empresa\s*[:\-]?\s*([a-z\s]+)', line)
+                        if m_emp_lbl:
+                            temp_empresa = m_emp_lbl.group(1).strip()
+                if not temp_labora:
+                    if "labora" in line:
+                        if "si" in line:
+                            temp_labora = "si"
+                        elif "no" in line:
+                            temp_labora = "no"
+
+            if temp_empresa and not temp_labora:
+                temp_labora = "si"
+                
+            if temp_nombre:
+                nombre_str = temp_nombre.title()
+            if temp_cedula:
+                cedula_str = temp_cedula.upper()
+            if temp_empresa:
+                empresa_str = temp_empresa.title()
+            if temp_labora:
+                labora_str = temp_labora.upper()
+
     partes = []
     if nombre_str:
         partes.append(f"Cónyuge: {nombre_str}")
@@ -1058,32 +1222,28 @@ def val_info_conyugue(text: str) -> ValidationResult:
 
 
 def val_proximidad_huella_firma(
-    boxes_firma: list[list[float]],
-    boxes_huella: list[list[float]],
+    pages_firma: list[int],
+    pages_huella: list[int],
+    relations: list[str],
     loan_type: str = "cies",
 ) -> ValidationResult:
-    """VL-13: Firma y huella no deben estar alejadas entre sí en la página.
-
-    Args:
-        boxes_firma:  Lista de bounding boxes [x1, y1, x2, y2] de firmas detectadas por YOLO.
-        boxes_huella: Lista de bounding boxes [x1, y1, x2, y2] de huellas detectadas por YOLO.
-    """
+    """VL-13: Firma y huella no deben estar alejadas entre sí en la página (verificado por LLM)."""
     if loan_type == "ventanilla":
         return ValidationResult(
             code="VL-13",
             label="Proximidad huella-firma",
             passed=True,
             severity="warning",
-            detail="Validación de proximidad omitida para Préstamo Ventanilla.",
+            detail="Validación de proximidad de huella-firma omitida para Préstamo Ventanilla.",
         )
 
-    if not boxes_firma or not boxes_huella:
+    if not pages_firma or not pages_huella:
         missing = []
-        if not boxes_firma:
+        if not pages_firma:
             missing.append("firmas")
-        if not boxes_huella:
+        if not pages_huella:
             missing.append("huellas")
-        detail = f"Faltante: No se detectaron {', '.join(missing)} en el documento. Imposible evaluar proximidad."
+        detail = f"Faltante: No se detectaron {', '.join(missing)} del cliente en las páginas analizadas. Imposible evaluar proximidad."
         return ValidationResult(
             code="VL-13",
             label="Proximidad huella-firma",
@@ -1092,28 +1252,19 @@ def val_proximidad_huella_firma(
             detail=detail,
         )
 
-    def _center(box: list[float]) -> tuple[float, float]:
-        x1, y1, x2, y2 = box
-        return (x1 + x2) / 2, (y1 + y2) / 2
+    has_correcta = "CORRECTA" in relations or "SOLAPADA" in relations
+    has_lejos = "LEJOS" in relations and not has_correcta
 
-    min_dist = float("inf")
-    for bf in boxes_firma:
-        cx_f, cy_f = _center(bf)
-        for bh in boxes_huella:
-            cx_h, cy_h = _center(bh)
-            dist = math.sqrt((cx_f - cx_h) ** 2 + (cy_f - cy_h) ** 2)
-            if dist < min_dist:
-                min_dist = dist
+    if has_correcta:
+        passed = True
+        detail = "Huella y firma detectadas en proximidad correcta por el modelo de visión. ✅"
+    elif has_lejos:
+        passed = False
+        detail = "La huella dactilar está alejada de la firma en la página (verificado por el modelo de visión)."
+    else:
+        passed = False
+        detail = "Se detectaron firmas y huellas, pero el modelo de visión no pudo confirmar su proximidad correcta."
 
-    passed = min_dist <= _PROXIMITY_MAX_PX
-    detail = (
-        f"Distancia mínima huella-firma: {min_dist:.0f}px — dentro del rango aceptable. ✅"
-        if passed
-        else (
-            f"Distancia huella-firma: {min_dist:.0f}px (límite: {_PROXIMITY_MAX_PX}px). "
-            "La huella está alejada de la firma. Revisar posición en el documento."
-        )
-    )
     return ValidationResult(
         code="VL-13",
         label="Proximidad huella-firma",
@@ -1128,14 +1279,18 @@ def val_proximidad_huella_firma(
 def run_all_validations(
     text: str,
     firma_detected: bool,
-    boxes_firma: list[list[float]],
-    boxes_huella: list[list[float]],
     pages_firma: list[int] | None = None,
+    pages_huella: list[int] | None = None,
+    relations: list[str] | None = None,
     loan_type: str = "cies",
 ) -> list[ValidationResult]:
     """Ejecuta las 13 validaciones en orden y retorna la lista de resultados."""
     # ── NORMALIZACIÓN PREVIA DE TEXTO (Aplica para todas las validaciones base) ──
     norm_text = normalize_ocr_text(text)
+    
+    p_firma = pages_firma or []
+    p_huella = pages_huella or []
+    rels = relations or []
     
     return [
         val_cedula_format(norm_text),
@@ -1146,9 +1301,9 @@ def run_all_validations(
         val_rango_salarial(norm_text),
         val_lugar_nacimiento(norm_text),
         val_efectividades(norm_text),
-        val_firma_cotizacion(norm_text, firma_detected, pages_firma),
+        val_firma_cotizacion(norm_text, firma_detected, p_firma),
         val_numero_planilla(norm_text),
         val_direccion_longitud(norm_text),
         val_info_conyugue(norm_text),
-        val_proximidad_huella_firma(boxes_firma, boxes_huella, loan_type),
+        val_proximidad_huella_firma(p_firma, p_huella, rels, loan_type),
     ]
